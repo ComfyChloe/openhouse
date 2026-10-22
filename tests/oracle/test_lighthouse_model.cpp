@@ -65,3 +65,57 @@ TEST(LighthouseModelOracle, Lh1AngleMatchesOriginal) {
 }
 
 }  // namespace
+
+namespace {
+
+double OriginalModel(int axis, int model, const double* state, double dt, const double* sensors, const double* cal14,
+                     bool* ok) {
+  FakeObject obj{};
+  obj.sensors = sensors;
+  CalHolder ch{nullptr, cal14, cal14 + 14};
+  FunctorData d{dt, &obj, 1, model, &ch};
+  FakeFunctor f{nullptr, &d};
+  double* params[1] = {const_cast<double*>(state)};
+  double out = 0;
+  *ok = oracle::Fn<EvalFn>(axis == 0 ? 0x376380 : 0x375a20)(&f, params, &out);
+  return out;
+}
+
+// LH2 planes (model types 2-5) against the original evaluate.
+TEST(LighthouseModelOracle, Lh2AngleMatchesOriginal) {
+  std::mt19937 rng(99);
+  std::uniform_real_distribution<double> u(-1, 1);
+  int n = 0, invalid = 0;
+  for (int iter = 0; iter < 2000; iter++) {
+    double state[49] = {};
+    state[0] = 1.5 * u(rng);
+    state[1] = 1.5 * u(rng);
+    state[2] = -1.0 - 3.0 * std::abs(u(rng));
+    for (int i = 3; i < 9; i++) state[i] = 0.5 * u(rng);
+    double q[4] = {1 + u(rng), 0.3 * u(rng), 0.3 * u(rng), 0.3 * u(rng)};
+    double qn = std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+    for (int i = 0; i < 4; i++) state[9 + i] = q[i] / qn;
+    for (int i = 13; i < 16; i++) state[i] = 3.0 * u(rng);
+    double sensors[6] = {0.05 * u(rng), 0.05 * u(rng), 0.05 * u(rng), 0.05 * u(rng), 0.05 * u(rng), 0.05 * u(rng)};
+    double cal[14];
+    for (int a = 0; a < 2; a++) {  // realistic LH2 magnitudes (lighthousedb)
+      double* c = cal + 7 * a;
+      c[0] = 0.05 * u(rng); c[1] = a ? 0.01 * u(rng) : 0.0; c[2] = 0.5 * u(rng); c[3] = 3.0 * u(rng);
+      c[4] = 0.01 * u(rng); c[5] = 3.0 * u(rng); c[6] = 0.7 * u(rng);
+    }
+    const double dt = iter % 3 == 0 ? 0.0 : 0.005 * u(rng);
+    for (int model : {2, 3, 4, 5})
+      for (int axis = 0; axis < 2; axis++) {
+        bool ok = false;
+        const double want = OriginalModel(axis, model, state, dt, sensors, cal, &ok);
+        const double got = lh::model::PredictAngle(state, dt, sensors + 3, axis, cal, model);
+        if (!ok) { EXPECT_TRUE(std::isnan(got)) << "iter " << iter; ++invalid; continue; }
+        ASSERT_NEAR(got, want, 1e-12) << "iter " << iter << " model " << model << " axis " << axis;
+        n++;
+      }
+  }
+  EXPECT_GT(n, 14000);
+  std::printf("LH2 model: %d matched, %d outside the domain on both\n", n, invalid);
+}
+
+}  // namespace

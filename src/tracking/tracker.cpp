@@ -202,8 +202,30 @@ void Tracker::OnLightPulse(const DeviceId& id, const LightPulse& pulse) {
   impl_->Drain(id, d);
 }
 
+void Tracker::OnLh2BeamWord(const DeviceId& id, const Lh2BeamWord& word) {
+  if (!std::isfinite(word.time)) return;
+  std::lock_guard lock(impl_->mutex);
+  auto found = impl_->devices.find(id);
+  if (found == impl_->devices.end() || !found->second.direct || !found->second.attached) return;
+  auto& d = found->second;
+  impl_->CheckGap(id, d, word.time);
+  if (!d.latestPulse || word.time > *d.latestPulse) d.latestPulse = word.time;
+  d.source->OnLh2BeamWord(word);
+  impl_->Drain(id, d);
+}
+
+void Tracker::OnLh2SensorWord(const DeviceId& id, const Lh2SensorWord& word) {
+  if (!std::isfinite(word.time)) return;
+  std::lock_guard lock(impl_->mutex);
+  auto found = impl_->devices.find(id);
+  if (found == impl_->devices.end() || !found->second.direct || !found->second.attached) return;
+  auto& d = found->second;
+  impl_->CheckGap(id, d, word.time);
+  d.source->OnLh2SensorWord(word);
+}
+
 void Tracker::SetBaseConfig(const BaseConfig& base, const BaseDynamicState& dynamic) {
-  if (!base.valid || !base.serial || base.cal.size() != 14 || base.hardwareVersion > 9 ||
+  if (!base.valid || !base.serial || base.cal.size() != 14 || (base.hardwareVersion > 9 && base.model == 1) ||
       !std::all_of(base.cal.begin(), base.cal.end(), [](double v) { return std::isfinite(v); })) return;
   std::lock_guard lock(impl_->mutex);
   impl_->bases[base.serial] = {base, dynamic};
@@ -258,6 +280,7 @@ bool Tracker::LoadBasePoses(const std::string& text, std::string* error) {
         config.cal = c.at("baseCalibration").get<std::vector<double>>();
         config.hardwareVersion = c.at("modelId").get<uint8_t>();
         config.ootxVersion = c.at("ootxVersion").get<uint8_t>();
+        config.model = ModelForHardware(config.hardwareVersion);
         BaseDynamicState dynamic;
         if (b.contains("dynamic_states") && !b.at("dynamic_states").empty()) {
           const auto& state = b.at("dynamic_states").back().at("dynamic_state");

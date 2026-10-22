@@ -115,6 +115,7 @@ bool RoomMap::Load(const std::string& path, std::string* error) {
         config.cal = c.at("calibration").get<std::vector<double>>();
         config.hardwareVersion = c.value("hardwareVersion", uint8_t(0));
         config.ootxVersion = c.value("ootxVersion", uint8_t(0));
+        config.model = ModelForHardware(config.hardwareVersion);
         if (c.contains("gravity")) dynamic.accelDir = c.at("gravity").get<std::array<float, 3>>();
         dynamic.sysUnlockCount = c.value("resetCount", uint8_t(0));
         dynamic.mode = c.value("mode", 0);
@@ -230,11 +231,13 @@ bool RoomMap::ImportSteamDatabase(const std::string& text, std::string* error) {
         config.cal = c.at("baseCalibration").get<std::vector<double>>();
         config.hardwareVersion = c.value("modelId", uint8_t(0));
         config.ootxVersion = c.value("ootxVersion", uint8_t(0));
+        config.model = ModelForHardware(config.hardwareVersion);
         if (b.contains("dynamic_states") && !b.at("dynamic_states").empty()) {
           const auto& state = b.at("dynamic_states").back().at("dynamic_state");
           if (state.contains("gravity_vector")) dynamic.accelDir = state.at("gravity_vector").get<std::array<float, 3>>();
           dynamic.sysUnlockCount = state.value("reset_count", uint8_t(0));
           dynamic.mode = state.value("basestation_mode", 0);
+          if (state.contains("sobChannel")) dynamic.sobChannel = state.at("sobChannel").get<int>();  // 0-based (OOTX agrees)
         }
         if (config.cal.size() == 14) configs[config.serial] = {config, dynamic};
       }

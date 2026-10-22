@@ -37,7 +37,13 @@ std::string Narrow(const wchar_t* w) {
 // iface 1 = optical (verified on Index HMD 28de:2000, see ai/driver/usb_protocol.md).
 bool Classify(uint16_t pid, int iface, EndpointKind& kind) {
   switch (pid) {
+    // Wired receivers, as stock's device scan (bitmask 0x400040001 over 0x2000-0x2022, plus
+    // 0x2300; the dongles 0x2101/0x2102 take the wireless path). Interface layout of the
+    // others assumed as on 0x2000 (not yet verified on hardware).
     case 0x2000:  // Lighthouse FPGA RX (Index HMD, Vive Pro)
+    case 0x2012:
+    case 0x2022:
+    case 0x2300:  // Bigscreen Beyond (SteamVR shows it as a Tundra device)
       if (iface == 0) { kind = EndpointKind::Imu; return true; }
       if (iface == 1) { kind = EndpointKind::Optical; return true; }
       return false;
@@ -431,7 +437,7 @@ void UsbTransport::PowerOff(const DeviceId& serial) {
 
 void UsbTransport::SetOpticalSubProtocol(const DeviceId& serial, int sub) {
   std::lock_guard lock(hapticMutex_);
-  if (haptics_.size() < 64) haptics_.push_back({serial, OpticalSubProtocolReport(sub), HostNow() + 1.0});
+  if (haptics_.size() < 64) haptics_.push_back({serial, OpticalSubProtocolReport(sub), HostNow() + 1.0, false, sub});
 }
 
 void UsbTransport::Run() {
@@ -461,7 +467,15 @@ void UsbTransport::Run() {
       DeviceCommandResult result{command.serial, command.powerOff, "not-connected", 0, command.report};
       if (passStart > command.deadline) result.status = "expired";
       else for (auto& o : open_) {
-        if (o.disconnected || o.info.serial != command.serial || o.info.kind != EndpointKind::Wireless) continue;
+        if (o.disconnected || o.info.serial != command.serial) continue;
+        if (o.info.kind != EndpointKind::Wireless) {
+          if (command.opticalMode < 0 || o.info.kind != EndpointKind::Imu) continue;
+          const auto mode = WiredModeReport(command.opticalMode), verbosity = WiredVerbosityReport();
+          result.bytes = hid_send_feature_report(o.dev, mode.data(), mode.size());
+          if (result.bytes == int(mode.size())) hid_send_feature_report(o.dev, verbosity.data(), verbosity.size());
+          result.status = result.bytes == int(mode.size()) ? "written" : "write-failed";
+          break;
+        }
         result.bytes = hid_send_feature_report(o.dev, command.report.data(), command.report.size());
         result.status = result.bytes == int(command.report.size()) ? "written" : "write-failed";
         break;

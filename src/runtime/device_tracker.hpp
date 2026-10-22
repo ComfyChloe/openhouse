@@ -49,6 +49,8 @@ class DeviceTracker {
   void OnBaseConfig(const BaseConfig&, const BaseDynamicState&);
   void OnImu(const ImuSample&);
   void OnPulse(const LightPulse&);
+  void OnLh2BeamWord(const Lh2BeamWord& w) { source_.OnLh2BeamWord(w); }
+  void OnLh2SensorWord(const Lh2SensorWord& w) { source_.OnLh2SensorWord(w); }
   // Runs queued work; base configurations decoded by this device are appended.
   void Process(std::vector<std::pair<BaseConfig, BaseDynamicState>>* decoded);
 

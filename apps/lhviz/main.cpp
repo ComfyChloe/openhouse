@@ -222,13 +222,24 @@ int main(int argc, char** argv) {
     double lowest = 1e9;
     for (const auto& d : snap.devices) {
       if (!d.pose.valid) continue;
-      lowest = std::min(lowest, d.pose.worldFromImu.position[1]);
+      // Only well-tracked poses: one flight out of the room would drag the floor down for good.
+      if (d.pose.state == lh::TrackingState::Tracking) lowest = std::min(lowest, d.pose.worldFromImu.position[1]);
       if (d.info.serial == follow) {
         const auto& p = d.pose.worldFromImu.position;
         camera.target = camera.target * 0.9 + Eigen::Vector3d(p[0], p[1], p[2]) * 0.1;
       }
     }
-    if (floorAuto && lowest < 1e8) floorHeight = std::min(floorHeight, float(lowest - 0.05));
+    // The floor: just under the 2nd percentile of tracked heights (one sample per frame,
+    // last 4000), not the minimum: a device thrown metres down by a bad fix isn't the floor.
+    if (floorAuto && lowest < 1e8) {
+      static std::deque<double> heights;
+      heights.push_back(lowest);
+      if (heights.size() > 4000) heights.pop_front();
+      std::vector<double> sorted(heights.begin(), heights.end());
+      const size_t k = sorted.size() / 50;
+      std::nth_element(sorted.begin(), sorted.begin() + long(k), sorted.end());
+      floorHeight = float(sorted[k] - 0.05);
+    }
 
     // ---- trails ------------------------------------------------------------------
     if (snap.hostTime - lastTrailTime > 0.02 || snap.hostTime < lastTrailTime) {

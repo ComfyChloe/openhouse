@@ -43,7 +43,7 @@ LighthouseDirect::LighthouseDirect(TrackedObjectModel model, double opticalTimeo
 }
 
 void LighthouseDirect::OnBaseConfig(const BaseConfig& config, const BaseDynamicState& dynamic) {
-  if (!config.valid || config.serial == 0 || config.cal.size() != 14 || config.hardwareVersion > 9) return;
+  if (!config.valid || config.serial == 0 || config.cal.size() != 14 || (config.hardwareVersion > 9 && config.model == 1)) return;
   if (!std::all_of(config.cal.begin(), config.cal.end(), [](double v) { return std::isfinite(v); })) return;
   bases_[config.serial] = {config, dynamic};
 }
@@ -416,9 +416,13 @@ bool LighthouseDirect::ApplyOpticalResiduals(const OpticalFrame& frame, const Ba
     const double cos = SensorNormalCosAngle(filter_.xLin, 0.0, point.data(), normal.data(), alt);
     if (!(cos >= 0.3)) continue;
     const auto cal = base.cal;
+    const int baseModel = base.model;
+    // LH2: a point outside the plane model's domain has no prediction; skip it.
+    if (baseModel != 1 && !std::isfinite(SensorAngular(filter_.xLin, offset, point.data(), s.axis, cal.data(), alt, baseModel)))
+      continue;
     residuals.push_back({1,
-      [=](const double* x, double* r) { r[0] = SensorAngular(x, offset, point.data(), s.axis, cal.data(), alt); },
-      [=](const Jet* x, Jet* r) { r[0] = SensorAngular(x, offset, point.data(), s.axis, cal.data(), alt); }});
+      [=](const double* x, double* r) { r[0] = SensorAngular(x, offset, point.data(), s.axis, cal.data(), alt, baseModel); },
+      [=](const Jet* x, Jet* r) { r[0] = SensorAngular(x, offset, point.data(), s.axis, cal.data(), alt, baseModel); }});
     z.push_back(s.angle); facing.push_back(cos);
   }
   // 0x36f740: when every sample fails the facing cutoff it skips the update but

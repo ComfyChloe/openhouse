@@ -104,8 +104,9 @@ struct AngleResidual {
   Eigen::Vector3d sensor;        // device (IMU) frame, already rotated by the angular-rate delta
   Eigen::Vector3d offset;        // world-frame displacement over dt (velocity * dt)
   int axis;
-  const double* cal;             // 7 values of this axis
+  const double* cal;             // the base's 14 values (both axes)
   double angle;
+  int model = 1;                 // base measurement model
 
   template <typename T>
   bool operator()(const T* base, const T* device, T* residual) const {
@@ -120,7 +121,7 @@ struct AngleResidual {
     const T inv[4] = {bq[0], -bq[1], -bq[2], -bq[3]};
     T b[3];
     ceres::QuaternionRotatePoint(inv, w, b);
-    residual[0] = (model::Lh1Angle(axis, b[0], b[1], b[2], cal) - T(angle)) / T(kSigma);
+    residual[0] = (model::BaseAngle(model, axis, b[0], b[1], b[2], cal) - T(angle)) / T(kSigma);
     return true;
   }
 };
@@ -144,7 +145,13 @@ class AngleCost : public ceres::SizedCostFunction<1, 7, 7> {
     const Eigen::Vector3d w = rotated + Eigen::Vector3d(dt[0], dt[1], dt[2]) + r_.offset - Eigen::Vector3d(bt[0], bt[1], bt[2]);
     const Eigen::Vector3d b = rb.transpose() * w;
     using J3 = ceres::Jet<double, 3>;
-    const J3 angle = model::Lh1Angle(r_.axis, J3(b.x(), 0), J3(b.y(), 1), J3(b.z(), 2), r_.cal);
+    const J3 angle = model::BaseAngle(r_.model, r_.axis, J3(b.x(), 0), J3(b.y(), 1), J3(b.z(), 2), r_.cal);
+    if (!std::isfinite(angle.a)) {  // LH2: outside the plane model's domain; no information
+      residuals[0] = 0;
+      for (int k = 0; k < 2; ++k)
+        if (jacobians && jacobians[k]) std::fill(jacobians[k], jacobians[k] + 7, 0.0);
+      return true;
+    }
     residuals[0] = (angle.a - r_.angle) / kSigma;
     if (!jacobians) return true;
     const Eigen::RowVector3d dAngle = angle.v.transpose() / kSigma;  // d residual / d b
@@ -182,8 +189,9 @@ class AngleCost : public ceres::SizedCostFunction<1, 7, 7> {
   AngleResidual r_;
 };
 
-BaseConfig ConfigFrom(uint32_t serial, const std::array<double, 14>& cal) {
+BaseConfig ConfigFrom(uint32_t serial, const std::array<double, 14>& cal, int baseModel = 1) {
   BaseConfig c;
+  c.model = baseModel;
   c.valid = true;
   c.serial = serial;
   c.cal.assign(cal.begin(), cal.end());
@@ -262,7 +270,9 @@ RoomSolveOutput SolveRoom(const RoomSolveInput& in) {
         const auto known = in.known.find(base);
         const auto cal = in.calibration.find(base);
         if (known == in.known.end() || cal == in.calibration.end()) continue;
-        const auto r = solver::Solve(*kf.model, ConfigFrom(base, cal->second), Raw(samples));
+        const auto bm = in.baseModels.find(base);
+        const auto r = solver::Solve(*kf.model, ConfigFrom(base, cal->second, bm == in.baseModels.end() ? 1 : bm->second),
+                                     Raw(samples));
         if (r.status == 2 || !std::isfinite(r.cost) || r.cost > 1e-6) continue;
         kf.pose.Set(known->second * SolverPose(r.pose));
         kf.worldFromPrimaryR = kf.pose.Get().rotation() * kp->primaryFromDevice.rotation().transpose();
@@ -288,7 +298,9 @@ RoomSolveOutput SolveRoom(const RoomSolveInput& in) {
     for (const auto& kf : kfs) {
       const auto s = kf.k->samples.find(base);
       if (s == kf.k->samples.end()) continue;
-      const auto r = solver::Solve(*kf.model, ConfigFrom(base, in.calibration.at(base)), Raw(s->second));
+      const auto bm = in.baseModels.find(base);
+      const auto r = solver::Solve(*kf.model, ConfigFrom(base, in.calibration.at(base), bm == in.baseModels.end() ? 1 : bm->second),
+                                   Raw(s->second));
       // The bootstrap solver often stops at its iteration limit with an excellent fit.
       if (r.status == 2 || !std::isfinite(r.cost) || r.cost > 1e-6) continue;
       candidates.push_back(kf.pose.Get() * SolverPose(r.pose).inverse());
@@ -321,6 +333,8 @@ RoomSolveOutput SolveRoom(const RoomSolveInput& in) {
         auto b = bases.find(base);
         if (b == bases.end()) continue;
         const auto& cal = in.calibration.at(base);
+        const auto bm = in.baseModels.find(base);
+        const int baseModel = bm == in.baseModels.end() ? 1 : bm->second;
         const Eigen::Isometry3d worldFromBase = b->second.Get(), worldFromDevice = kf.pose.Get();
         for (const auto& ks : samples) {
           const auto& s = ks.sample;
@@ -331,7 +345,7 @@ RoomSolveOutput SolveRoom(const RoomSolveInput& in) {
           const Eigen::Vector3d normal = worldFromDevice.rotation() * ks.normal;
           const Eigen::Vector3d toSensor = (point - worldFromBase.translation()).normalized();
           if (-normal.dot(toSensor) < 0.3) continue;
-          const AngleResidual residual{ks.point, Eigen::Vector3d::Zero(), s.axis, cal.data() + s.axis * kCalPerAxis, s.angle};
+          const AngleResidual residual{ks.point, Eigen::Vector3d::Zero(), s.axis, cal.data(), s.angle, baseModel};
           auto* cost = new AngleCost(residual);
           ids[i].push_back(problem.AddResidualBlock(cost, new ceres::HuberLoss(kHuber), b->second.v, kf.pose.v));
           ++observations;
@@ -493,10 +507,10 @@ RoomSolveOutput SolveRoom(const RoomSolveInput& in) {
 }
 
 std::optional<Eigen::Isometry3d> SolveFromBase(const Keyframe& keyframe, uint32_t base, const TrackedObjectModel& model,
-                                               const std::array<double, 14>& calibration) {
+                                               const std::array<double, 14>& calibration, int baseModel) {
   const auto s = keyframe.samples.find(base);
   if (s == keyframe.samples.end()) return std::nullopt;
-  const auto r = solver::Solve(model, ConfigFrom(base, calibration), Raw(s->second));
+  const auto r = solver::Solve(model, ConfigFrom(base, calibration, baseModel), Raw(s->second));
   if (r.status == 2 || !std::isfinite(r.cost) || r.cost > 1e-6) return std::nullopt;
   return SolverPose(r.pose);
 }

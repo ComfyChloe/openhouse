@@ -59,6 +59,7 @@ struct RoomSolveInput {
   std::vector<std::shared_ptr<const Keyframe>> keyframes;
   std::map<uint32_t, Eigen::Isometry3d> known;        // current room map
   std::map<uint32_t, std::array<double, 14>> calibration;
+  std::map<uint32_t, int> baseModels;  // BaseConfig::model; absent = 1 (LH1)
   std::map<std::string, std::shared_ptr<const TrackedObjectModel>> models;  // IMU frame
   uint32_t origin = 0;
   int fresh = -1;           // the last `fresh` keyframes are new since the last solve (< 0: all)
@@ -79,7 +80,7 @@ RoomSolveOutput SolveRoom(const RoomSolveInput& input);
 // Diagnostics: the device pose from one base's light of a keyframe alone (base frame),
 // as the bootstrap solver finds it; nullopt if it doesn't converge.
 std::optional<Eigen::Isometry3d> SolveFromBase(const Keyframe& keyframe, uint32_t base, const TrackedObjectModel& model,
-                                               const std::array<double, 14>& calibration);
+                                               const std::array<double, 14>& calibration, int baseModel = 1);
 
 // Keeps a diverse, bounded set of keyframes.
 class KeyframeStore {

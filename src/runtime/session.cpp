@@ -171,6 +171,8 @@ class SessionImpl final : public Session, public InputSinkBase {
   void OnClockOffset(const DeviceId&, double offset) override;
   void OnImu(const DeviceId&, const ImuSample&) override;
   void OnLightPulse(const DeviceId&, const LightPulse&) override;
+  void OnLh2BeamWord(const DeviceId&, const Lh2BeamWord&) override;
+  void OnLh2SensorWord(const DeviceId&, const Lh2SensorWord&) override;
   void OnInput(const DeviceId&, const InputReport&) override;
   void OnBattery(const DeviceId&, const BatteryReport&) override;
 
@@ -185,6 +187,9 @@ class SessionImpl final : public Session, public InputSinkBase {
     bool attached = false;
     double lastData = -1e300;  // host time
     TrackingState lastState = TrackingState::Disconnected;
+    // Light mode (live only): 0 = LH1 pulses, 1 = LH2 words; -1 not set yet.
+    int lightMode = -1;
+    double modeSince = 0, lastGoodLight = -1e300;  // host time
   };
   struct Base {
     BaseConfig config;
@@ -196,6 +201,7 @@ class SessionImpl final : public Session, public InputSinkBase {
   void Tick() { if (options_.replayPath.empty()) now_ = std::max(now_, SteadyNow()); }
   void Touch(Device& d, double deviceTime);
   void Process(const DeviceId& id, Device& d);
+  void UpdateLightMode(const DeviceId& id, Device& d);
   void PushIdentities();
   void TakeKeyframes(Device& d);
   bool SolveDue() const;
@@ -542,6 +548,44 @@ void SessionImpl::OnImu(const DeviceId& id, const ImuSample& sample) {
   Touch(found->second, sample.time);
   found->second.tracker->OnImu(sample);
   Process(id, found->second);
+  UpdateLightMode(id, found->second);
+}
+
+// A device reports LH1 or LH2 light, whichever mode the host set (LH1 after power-on). In
+// LH2 mode it reports nothing from LH1 bases; in LH1 mode, LH2 bases give stray pulses but
+// no sync flash. Usable light: an LH1 sync-width pulse, or an LH2 beam word.
+//  * Start from the room's known bases (SteamVR's database): LH2 if all are 2.0 bases.
+//  * Once bases of one kind only have been seen, keep every device in that mode (a device
+//    that sees nothing is occluded; re-send the mode now and then in case it was lost).
+//  * Otherwise (nothing seen yet, or a mixed room), a device without usable light for
+//    kDark seconds tries the other mode.
+void SessionImpl::UpdateLightMode(const DeviceId& id, Device& d) {
+  constexpr double kDark = 2.5, kResend = 5.0;
+  if (!usb_ || !d.attached) return;
+  bool knownLh1 = false, knownLh2 = false, seenLh1 = false, seenLh2 = false;
+  for (const auto& [serial, b] : bases_) {
+    const bool lh2 = b.config.model != 1;
+    (lh2 ? knownLh2 : knownLh1) = true;
+    if (b.seen) (lh2 ? seenLh2 : seenLh1) = true;
+  }
+  auto set = [&](int mode, const char* why) {
+    usb_->SetOpticalSubProtocol(id, mode);
+    if (mode != d.lightMode) Emit(SessionEventType::Log, id, id + ": light mode " + (mode ? "LH2" : "LH1") + " (" + why + ")");
+    d.lightMode = mode;
+    d.modeSince = now_;
+  };
+  if (d.lightMode < 0) {
+    set(knownLh2 && !knownLh1 ? 1 : 0, knownLh2 && !knownLh1 ? "room has 2.0 bases" : "default");
+    return;
+  }
+  if (now_ - d.lastGoodLight < kDark || now_ - d.modeSince < kDark) return;
+  if (seenLh1 != seenLh2) {
+    const int want = seenLh2 ? 1 : 0;
+    if (want != d.lightMode) set(want, "room's bases");
+    else if (now_ - d.modeSince >= kResend) set(want, "re-send");
+    return;
+  }
+  set(1 - d.lightMode, "no usable light");
 }
 
 void SessionImpl::OnLightPulse(const DeviceId& id, const LightPulse& pulse) {
@@ -552,7 +596,31 @@ void SessionImpl::OnLightPulse(const DeviceId& id, const LightPulse& pulse) {
   auto found = devices_.find(id);
   if (found == devices_.end() || !found->second.tracker) return;
   Touch(found->second, pulse.time);
+  if (pulse.width >= 56e-6 && pulse.width <= 140e-6) found->second.lastGoodLight = now_;  // a sync flash
   found->second.tracker->OnPulse(pulse);
+}
+
+void SessionImpl::OnLh2BeamWord(const DeviceId& id, const Lh2BeamWord& word) {
+  if (warming_) return;
+  std::lock_guard lock(mutex_);
+  Tick();
+  if (!Enabled(id)) return;
+  auto found = devices_.find(id);
+  if (found == devices_.end() || !found->second.tracker) return;
+  Touch(found->second, word.time);
+  found->second.lastGoodLight = now_;
+  found->second.tracker->OnLh2BeamWord(word);
+}
+
+void SessionImpl::OnLh2SensorWord(const DeviceId& id, const Lh2SensorWord& word) {
+  if (warming_) return;
+  std::lock_guard lock(mutex_);
+  Tick();
+  if (!Enabled(id)) return;
+  auto found = devices_.find(id);
+  if (found == devices_.end() || !found->second.tracker) return;
+  Touch(found->second, word.time);
+  found->second.tracker->OnLh2SensorWord(word);
 }
 
 void SessionImpl::OnInput(const DeviceId& id, const InputReport& report) {
@@ -599,8 +667,10 @@ void SessionImpl::Process(const DeviceId& id, Device& d) {
   for (const auto& [config, dynamic] : decoded) {
     auto& base = bases_[config.serial];
     const bool first = !base.seen;
+    const bool newChannel = dynamic.sobChannel >= 0 && base.dynamic.sobChannel != dynamic.sobChannel;
     base.config = config;
     base.dynamic = dynamic;
+    if (newChannel) PushIdentities();  // the other devices identify this LH2 base at once
     base.seen = true;
     room_.OnBaseSeen(config, dynamic);
     for (auto& [otherId, other] : devices_)
@@ -636,7 +706,7 @@ void SessionImpl::TakeKeyframes(Device& d) {
         if (!rb || model == models_.end() || b == bases_.end() || b->second.config.cal.size() != 14) continue;
         std::array<double, 14> cal;
         std::copy(b->second.config.cal.begin(), b->second.config.cal.end(), cal.begin());
-        const auto solved = SolveFromBase(*k, base, *model->second, cal);
+        const auto solved = SolveFromBase(*k, base, *model->second, cal, b->second.config.model);
         if (!solved) continue;
         const Eigen::Isometry3d light = rb->worldFromBase * *solved;
         const Eigen::Vector3d d = light.translation() - pose->translation();
@@ -678,6 +748,7 @@ RoomSolveInput SessionImpl::SolveInput() {
       std::array<double, 14> cal;
       std::copy(b.config.cal.begin(), b.config.cal.end(), cal.begin());
       in.calibration[serial] = cal;
+      in.baseModels[serial] = b.config.model;
     }
   in.models = models_;
   in.refineBases = !std::getenv("LH_EVALUATE_ROOM");  // diagnostics: score a fixed room
@@ -800,8 +871,15 @@ void SessionImpl::SolverMain() {
 void SessionImpl::PushIdentities() {
   std::vector<tdm::TdmDisambiguator::Identity> all;
   for (const auto& [serial, id] : identities_) all.push_back(id);
+  std::map<int, std::pair<BaseConfig, BaseDynamicState>> channels;  // LH2: one channel per base, every device
+  for (const auto& [serial, b] : bases_)
+    if (b.dynamic.sobChannel >= 0 && b.config.valid && b.config.cal.size() == 14)
+      channels[b.dynamic.sobChannel] = {b.config, b.dynamic};
   for (auto& [id, d] : devices_)
-    if (d.tracker) d.tracker->Source().SetKnownIdentities(all);
+    if (d.tracker) {
+      d.tracker->Source().SetKnownIdentities(all);
+      d.tracker->Source().SetKnownSobChannels(channels);
+    }
 }
 
 void SessionImpl::CollectLogs(Device* d) {
@@ -877,7 +955,8 @@ SessionSnapshot SessionImpl::Snapshot() const {
     s.seen = b.seen;
     s.mode = b.dynamic.mode;
     // lhbs multi channels are its slot (1-4 on the display), stock ones A, b, c.
-    if (b.dynamic.multiSlot >= 0) s.channel = std::to_string(b.dynamic.multiSlot + 1);
+    if (b.dynamic.sobChannel >= 0) s.channel = std::to_string(b.dynamic.sobChannel + 1);  // LH2: 1-16
+    else if (b.dynamic.multiSlot >= 0) s.channel = std::to_string(b.dynamic.multiSlot + 1);
     else if (b.dynamic.mode >= 1 && b.dynamic.mode <= 3) s.channel = std::string(1, "Abc"[b.dynamic.mode - 1]);
     s.faults = b.dynamic.faults;
   }

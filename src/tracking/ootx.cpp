@@ -207,6 +207,7 @@ void ParseBaseConfig(const uint8_t* p, BaseConfig* cfg) {
   cfg->serial = uint32_t(p[2]) | uint32_t(p[3]) << 8 | uint32_t(p[4]) << 16 | uint32_t(p[5]) << 24;
   cfg->hardwareVersion = p[0xf];
   cfg->ootxVersion = p[0] & 0x3f;
+  cfg->model = ModelForHardware(cfg->hardwareVersion);
   for (int axis = 0; axis < 2; axis++) {
     const uint8_t* b = p + 6 + 2 * axis;
     for (int off : {4, 0, 10, 0x11, 0x15, 0x1b, 0x1f}) cfg->cal.push_back(double(HalfToFloat(RdU16(b + off))));
@@ -315,6 +316,10 @@ bool DecodeRing(const OotxMajorityRing& ring, BaseConfig* cfg, BaseDynamicState*
     }
   }
   if (!found) return false;
+  return DecodeFramer(f, cfg, dyn);
+}
+
+bool DecodeFramer(const OotxFramer& f, BaseConfig* cfg, BaseDynamicState* dyn) {
   uint8_t payload[48] = {};
   const uint16_t len = f.CopyPayload(payload, 0x2b);
   if (!f.CrcOk(payload, len)) return false;

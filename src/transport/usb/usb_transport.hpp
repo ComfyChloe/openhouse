@@ -93,7 +93,7 @@ class UsbTransport {
   // Queued to the HID reader: never issue feature reports from host callbacks.
   void Haptic(const DeviceId& serial, double frequency, double amplitude, double duration);
   void PowerOff(const DeviceId& serial);
-  // Diagnostics: ask a wireless device for LH1 (0) or LH2 (1) light reports.
+  // Ask a device (wireless or wired) for LH1 (0) or LH2 (1) light reports.
   void SetOpticalSubProtocol(const DeviceId& serial, int sub);
 
   // Loads a cached SteamVR config for a serial ("LHR-0704E07A"), or "".
@@ -150,7 +150,10 @@ class UsbTransport {
   std::thread thread_;
   std::atomic<bool> stop_{false};
   int wirelessProtocol_ = 1;
-  struct HapticCommand { std::string serial; std::array<uint8_t, 64> report; double deadline; bool powerOff = false; };
+  struct HapticCommand {
+    std::string serial; std::array<uint8_t, 64> report; double deadline; bool powerOff = false;
+    int opticalMode = -1;  // light-mode command: wired devices take another report (below)
+  };
   std::mutex hapticMutex_;
   std::vector<HapticCommand> haptics_;
 };

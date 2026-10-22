@@ -50,6 +50,7 @@ add_library(lh_tracking
   src/tracking/ootx.cpp
   src/tracking/disambiguator_tdm.cpp
   src/tracking/disambiguator_multi.cpp
+  src/tracking/disambiguator_sob.cpp
   src/tracking/direct_filter.cpp
   src/tracking/tracked_object.cpp
   src/tracking/pose_solver.cpp
@@ -75,9 +76,19 @@ if(LH_BUILD_USB)
     find_package(hidapi CONFIG REQUIRED)
     set(LH_HIDAPI_TARGET hidapi::hidapi)
   else()
+    # hidapi's hidraw backend, built in with hidden symbols (third_party/hidapi/README.md):
+    # a host's own hidapi (monado-service: libusb backend) must not replace it.
     find_package(PkgConfig REQUIRED)
-    pkg_check_modules(HIDAPI REQUIRED IMPORTED_TARGET hidapi-hidraw)
-    set(LH_HIDAPI_TARGET PkgConfig::HIDAPI)
+    pkg_check_modules(UDEV REQUIRED IMPORTED_TARGET libudev)
+    enable_language(C)
+    add_library(lh_hidapi STATIC third_party/hidapi/linux/hid.c)
+    set_target_properties(lh_hidapi PROPERTIES POSITION_INDEPENDENT_CODE ON C_VISIBILITY_PRESET hidden)
+    target_include_directories(lh_hidapi PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party/hidapi>
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party/hidapi/hidapi>)
+    target_link_libraries(lh_hidapi PUBLIC PkgConfig::UDEV)
+    install(TARGETS lh_hidapi EXPORT lighthouseTargets ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+    set(LH_HIDAPI_TARGET lh_hidapi)
   endif()
   add_library(lh_usb
     src/transport/usb/report_parser.cpp
@@ -160,7 +171,7 @@ endif()
 option(LH_BUILD_OPENVR_DRIVER "Build the drop-in driver_lighthouse.so" ON)
 find_path(OPENVR_INCLUDE_DIR openvr_driver.h PATH_SUFFIXES openvr)
 if(LH_BUILD_OPENVR_DRIVER AND LH_BUILD_USB AND OPENVR_INCLUDE_DIR)
-  add_library(driver_lighthouse MODULE src/openvr/driver_lighthouse.cpp src/openvr/hand_skeleton.cpp src/openvr/raw_alignment.cpp src/openvr/room_publisher.cpp src/openvr/host_frame.cpp $<TARGET_OBJECTS:lh_runtime>)
+  add_library(driver_lighthouse MODULE src/openvr/driver_lighthouse.cpp src/openvr/hand_skeleton.cpp src/openvr/raw_alignment.cpp src/openvr/room_publisher.cpp src/openvr/host_frame.cpp src/openvr/stock_hmd.cpp $<TARGET_OBJECTS:lh_runtime>)
   if(WIN32)
     set(LH_OPENVR_PLATFORM win64)
   else()

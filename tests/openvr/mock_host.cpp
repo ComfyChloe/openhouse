@@ -95,6 +95,28 @@ class Resources : public IVRResources {
   uint32_t GetResourceFullPath(const char*, const char*, char* v, uint32_t n) override { if (n) v[0] = 0; return 0; }
 } g_resources;
 
+// "IVRServerInternal_XXX" / "IVRServer_XXX": private SteamVR interfaces the stock driver
+// calls without checking (loaded by our driver for headsets, stock_hmd.hpp). Monado's
+// steamvr_lh serves a class of empty virtual functions; so do we.
+struct ServerStub {
+#define LH_STUB(n) virtual void Unknown##n() {}
+  LH_STUB(0) LH_STUB(1) LH_STUB(2) LH_STUB(3) LH_STUB(4) LH_STUB(5) LH_STUB(6) LH_STUB(7) LH_STUB(8) LH_STUB(9)
+  LH_STUB(10) LH_STUB(11) LH_STUB(12) LH_STUB(13) LH_STUB(14) LH_STUB(15) LH_STUB(16) LH_STUB(17) LH_STUB(18) LH_STUB(19)
+  LH_STUB(20) LH_STUB(21) LH_STUB(22) LH_STUB(23) LH_STUB(24) LH_STUB(25) LH_STUB(26) LH_STUB(27) LH_STUB(28) LH_STUB(29)
+  LH_STUB(30) LH_STUB(31) LH_STUB(32) LH_STUB(33) LH_STUB(34) LH_STUB(35) LH_STUB(36) LH_STUB(37) LH_STUB(38) LH_STUB(39)
+  LH_STUB(40) LH_STUB(41) LH_STUB(42) LH_STUB(43) LH_STUB(44) LH_STUB(45) LH_STUB(46) LH_STUB(47) LH_STUB(48) LH_STUB(49)
+#undef LH_STUB
+  virtual ~ServerStub() = default;
+} g_server;
+
+// "IVRBlockQueue_005" (camera frames): every call fails (EBlockQueueError 1), no queue.
+struct BlockQueueStub {
+#define LH_STUB(n) virtual int Unknown##n() { return 1; }
+  LH_STUB(0) LH_STUB(1) LH_STUB(2) LH_STUB(3) LH_STUB(4) LH_STUB(5) LH_STUB(6) LH_STUB(7) LH_STUB(8) LH_STUB(9)
+  LH_STUB(10) LH_STUB(11) LH_STUB(12) LH_STUB(13) LH_STUB(14) LH_STUB(15)
+#undef LH_STUB
+} g_blockQueue;
+
 class Host : public IVRServerDriverHost, public IVRDriverInput, public IVRProperties, public IVRDriverLog,
              public IVRDriverContext {
  public:
@@ -110,6 +132,8 @@ class Host : public IVRServerDriverHost, public IVRDriverInput, public IVRProper
     if (!std::strcmp(version, IVRSettings_Version)) return &g_settings;
     if (!std::strcmp(version, IVRDriverManager_Version)) return &g_manager;
     if (!std::strcmp(version, IVRResources_Version)) return &g_resources;
+    if (!std::strcmp(version, "IVRServerInternal_XXX") || !std::strcmp(version, "IVRServer_XXX")) return &g_server;
+    if (!std::strncmp(version, "IVRBlockQueue_", 14)) return &g_blockQueue;
     if (err) *err = VRInitError_Init_InterfaceNotFound;
     return nullptr;
   }

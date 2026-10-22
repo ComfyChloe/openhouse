@@ -198,12 +198,13 @@ void SensorInBase(const T* x, double dt, const double sensor[3], int altIdx, T o
   out[2] = d + d + sensor[2] + c[2];
 }
 
-// CSensorPositionAngular model type 1 (LH1), any base slot.
+// CSensorPositionAngular, any base slot; baseModel 1 = LH1 (stock path), 2-5 = LH2.
 template <typename T>
-T SensorAngular(const T* x, double dt, const double sensor[3], int axis, const double* cal14, int altIdx) {
+T SensorAngular(const T* x, double dt, const double sensor[3], int axis, const double* cal14, int altIdx,
+                int baseModel = 1) {
   T p[3];
   SensorInBase(x, dt, sensor, altIdx, p);
-  return model::Lh1Angle(axis, p[0], p[1], p[2], cal14 + axis * model::kCalPerAxis);
+  return model::BaseAngle(baseModel, axis, p[0], p[1], p[2], cal14);
 }
 
 // CSensorNormalCosAngle (0x34e0e0): −cos between the rotated sensor normal and the

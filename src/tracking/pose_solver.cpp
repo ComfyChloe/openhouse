@@ -42,7 +42,7 @@ struct Term {
 };
 
 template <typename T>
-void EvalTerm(const Term& t, const TrackedObjectModel& obj, const double* cal14, const T* x, T* out, int* n) {
+void EvalTerm(const Term& t, const TrackedObjectModel& obj, const double* cal14, int baseModel, const T* x, T* out, int* n) {
   if (t.axes == 0) {
     out[(*n)++] = 0.25 * (1.0 - (x[3] * x[3] + x[4] * x[4] + x[5] * x[5] + x[6] * x[6]));
     return;
@@ -57,13 +57,14 @@ void EvalTerm(const Term& t, const TrackedObjectModel& obj, const double* cal14,
   const T px = d0 + d0 + x[0] + s[0];
   const T py = x[1] + s[1] + d1 + d1;
   const T pz = d2 + d2 + x[2] + s[2];
-  if (t.axes & 1) out[(*n)++] = model::Lh1Angle(0, px, py, pz, cal14);
-  if (t.axes & 2) out[(*n)++] = model::Lh1Angle(1, px, py, pz, cal14 + model::kCalPerAxis);
+  if (t.axes & 1) out[(*n)++] = model::BaseAngle(baseModel, 0, px, py, pz, cal14);
+  if (t.axes & 2) out[(*n)++] = model::BaseAngle(baseModel, 1, px, py, pz, cal14);
 }
 
 struct Problem {
   const TrackedObjectModel* obj;
   const double* cal;
+  int model = 1;  // base measurement model (BaseConfig::model)
   std::vector<Term> terms;
   std::vector<double> z;
   int N = 0;
@@ -72,7 +73,7 @@ struct Problem {
   void Eval(const T* x, std::vector<T>* h) const {
     h->resize(size_t(N));
     int n = 0;
-    for (const auto& t : terms) EvalTerm(t, *obj, cal, x, h->data(), &n);
+    for (const auto& t : terms) EvalTerm(t, *obj, cal, model, x, h->data(), &n);
   }
   // Line-search objective (0x3a26c0): cost at x − α·step with q renormalized.
   double Cost(const double* x, const Eigen::Matrix<double, 7, 1>& step, double alpha) const {
@@ -176,6 +177,7 @@ Result Solve(const TrackedObjectModel& obj, const BaseConfig& base, std::vector<
   Problem pr;
   pr.obj = &obj;
   pr.cal = base.cal.data();
+  pr.model = base.model;
   for (size_t i = 0; i < samples.size();) {
     const auto& s = samples[i];
     const int idx = obj.IndexOf(s.sensor);
@@ -315,7 +317,7 @@ int WorstSensor(const TrackedObjectModel& obj, const BaseConfig& base, const Pos
     const int idx = obj.IndexOf(s.sensor);
     if (idx < 0 || s.axis < 0 || s.axis > 1) continue;
     const Eigen::Vector3d pt = q * Eigen::Vector3d(obj.points[size_t(idx)].data()) + t;
-    const double r = std::abs(Wrap(model::Lh1Angle(s.axis, pt.x(), pt.y(), pt.z(), base.cal.data() + s.axis * model::kCalPerAxis) - s.angle));
+    const double r = std::abs(Wrap(model::BaseAngle(base.model, s.axis, pt.x(), pt.y(), pt.z(), base.cal.data()) - s.angle));
     if (r > largest) { largest = r; worst = s.sensor; }
   }
   return worst;
@@ -380,8 +382,8 @@ Result SolveMultiStartImpl(const TrackedObjectModel& obj, const BaseConfig& base
   for (int i = -30; i <= 30; ++i)
     for (int k = -30; k <= 30; ++k) {
       const double u = i * 0.06, v = k * 0.06;
-      const double a0 = model::Lh1Angle(0, u, v, -1.0, base.cal.data());
-      const double a1 = model::Lh1Angle(1, u, v, -1.0, base.cal.data() + model::kCalPerAxis);
+      const double a0 = model::BaseAngle(base.model, 0, u, v, -1.0, base.cal.data());
+      const double a1 = model::BaseAngle(base.model, 1, u, v, -1.0, base.cal.data());
       const double e = Wrap(a0 - mean[0]) * Wrap(a0 - mean[0]) + Wrap(a1 - mean[1]) * Wrap(a1 - mean[1]);
       if (e < rayError) { rayError = e; ray = Eigen::Vector3d(u, v, -1).normalized(); }
     }

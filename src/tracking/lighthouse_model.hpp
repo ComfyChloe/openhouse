@@ -10,6 +10,7 @@
 #pragma once
 
 #include <cmath>
+#include <limits>
 
 namespace lh::model {
 
@@ -91,6 +92,79 @@ T Lh1Angle(int axis, const T& x, const T& y, const T& z, const double* cal) {
   a = a - cos(a + cal[kGibPhase]) * cal[kGibMag];
   const T d = atan2(x, nz);
   return (cal[kCurve] * d) * d + a;
+}
+
+// LH2 (gen2, "sync on beam") plane angle of point (x,y,z) in base frame (0x3760e0 /
+// 0x375780, called by CSensorPositionAngular model types 2 and 3). The base looks down
+// -z like LH1. Each revolution sweeps two planes, tilted -30 deg (plane 0) and +30 deg
+// (plane 1) about the rotor axis; model type 3 swaps the tilts (flip). Returns false
+// when the point is outside the model's domain (asin argument beyond +-1), as stock.
+// cal points at the 7 doubles of that plane (tilt, phase, curve, gibphase, gibmag,
+// ogeephase, ogeemag).
+constexpr double kLh2Curve[4] = {0.0076069798, 5.3685255e-06, 0.0028679863, -8.0108022e-06};  // 0x1a3700
+
+template <typename T>
+bool Lh2Angle(int plane, bool flip, const T& x, const T& y, const T& z, const double* cal, T* out) {
+  using std::asin;
+  using std::atan2;
+  using std::cos;
+  using std::sin;
+  using std::sqrt;
+  using std::tan;
+  constexpr double kSixth = 0.5235987755982988;  // pi/6: 0x1a9770, table 0x1a2970
+  const T nz = -z;
+  const T b = atan2(nz, x);
+  const int side = flip ? 1 - plane : plane;
+  const double tilt = cal[kTilt] + (side == 0 ? -kSixth : kSixth);
+  const T r2 = nz * nz + x * x;
+  const T s = (T(tan(tilt)) * y) / sqrt(r2);
+  if (s < T(-1.0) || s > T(1.0)) return false;
+  const double sn = sin(tilt), cs = cos(tilt);
+  const T u = y / (sqrt(r2 + y * y) * cs);
+  if (u > T(1.0) || u < T(-1.0)) return false;
+  const T e = asin(u);  // elevation of the point off the plane's sweep
+  // Curve term v(e) = e^2 (c0 + c1 e + c2 e^2 + c3 e^3) and its derivative.
+  const T p = ((T(kLh2Curve[3]) * e + kLh2Curve[2]) * e + kLh2Curve[1]) * e + kLh2Curve[0];
+  const T dp = (T(3.0 * kLh2Curve[3]) * e + 2.0 * kLh2Curve[2]) * e + kLh2Curve[1];
+  const T v = e * e * p;
+  const T dv = e * e * dp + T(2.0) * e * p;
+  const T ogee = sin((b + cal[kOgeePhase]) - asin(s)) * cal[kOgeeMag] + cal[kCurve];
+  const T s2 = (v * ogee) / (T(cs) - ogee * dv * sn) + s;
+  if (s2 > T(1.0) || s2 < T(-1.0)) return false;
+  T a = b - asin(s2);
+  a = a + sin(a + cal[kGibPhase]) * cal[kGibMag];
+  if (plane == 1) a = a + (2.0943951023931953 - cal[kPhase]);  // 2pi/3: 0x1a9998
+  *out = a + kSixth;
+  return true;
+}
+
+// Angle of one base axis (LH1 sweep or LH2 plane) by model type (CSensorPositionAngular
+// +0x14, evaluates 0x376380 / 0x375a20): 1 = LH1; 2-5 = LH2 variants: 3 and 5 swap the
+// plane tilts, and one plane's origin sits a few mm along y (type 3 plane 1: 9.14 mm,
+// 0x1a9a60; types 4 and 5 plane 0: 9.25 mm, 0x1a9b40). cal14 is the whole base
+// calibration (both axes). LH2 points outside the model's domain return NaN.
+template <typename T>
+T BaseAngle(int model, int axis, const T& x, const T& y, const T& z, const double* cal14) {
+  const double* cal = cal14 + axis * kCalPerAxis;
+  if (model >= 2 && model <= 5) {
+    double dy = 0;
+    if (model == 3 && axis == 1) dy = 0.00914;
+    if (model >= 4 && axis == 0) dy = 0.00925;
+    T out;
+    if (!Lh2Angle(axis, model == 3 || model == 5, x, T(y - dy), z, cal, &out))
+      return T(std::numeric_limits<double>::quiet_NaN());
+    return out;
+  }
+  return Lh1Angle(axis, x, y, z, cal);
+}
+
+// Full CSensorPositionAngular, any model type: state -> predicted angle.
+template <typename T>
+T PredictAngle(const T* state, double dt, const double sensor[3], int axis, const double* cal14, int model) {
+  T pos[3], q[4], r[3];
+  ExtrapolatePose(state, dt, pos, q);
+  QuatRotate(q, sensor, r);
+  return BaseAngle(model, axis, T(r[0] + pos[0]), T(r[1] + pos[1]), T(r[2] + pos[2]), cal14);
 }
 
 // Full CSensorPositionAngular model type 1: state -> predicted angle.

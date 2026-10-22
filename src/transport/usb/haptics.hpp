@@ -69,4 +69,12 @@ inline std::array<uint8_t, 64> PowerOffReport() {
 inline std::array<uint8_t, 64> OpticalSubProtocolReport(int sub) {
   return {0xff, 0x87, 3, 1, uint8_t(sub), 0};
 }
+
+// The same for a wired device (USB cable: Index HMD 28de:2000, controllers and trackers
+// 28de:2300): feature 0x04 {mode} (0 = LH1, 1 = LH2), then 0x07 {0x03} (lightcap
+// verbosity; LH1 pulses then come as report 0x25). From libsurvive (vive_switch_mode);
+// verified on a wired Index controller: LH2 mode stops its LH1 reports, LH1 mode restores
+// them. Any of its interfaces takes it.
+inline std::array<uint8_t, 64> WiredModeReport(int sub) { return {0x04, uint8_t(sub)}; }
+inline std::array<uint8_t, 64> WiredVerbosityReport() { return {0x07, 0x03}; }
 }

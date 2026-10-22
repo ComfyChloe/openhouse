@@ -62,6 +62,8 @@ class Tracker : public InputSinkBase {
   void OnClockOffset(const DeviceId&, double offset) override;
   void OnImu(const DeviceId&, const ImuSample&) override;
   void OnLightPulse(const DeviceId&, const LightPulse&) override;
+  void OnLh2BeamWord(const DeviceId&, const Lh2BeamWord&) override;
+  void OnLh2SensorWord(const DeviceId&, const Lh2SensorWord&) override;
 
   // Optional external base calibration/placement (network/replay/DB adapters).
   void SetBaseConfig(const BaseConfig&, const BaseDynamicState& dynamic = {});

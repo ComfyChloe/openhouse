@@ -568,10 +568,43 @@ void DeviceTracker::CheckHealth() {
       std::snprintf(text, sizeof text, "primary base %08X dark for %.0f ms, switching to base %08X", primary,
                     std::min(9999.0, (Now() - primaryLast) * 1000), visible);
       Log(text);
-      const auto& f = filter_->Filter();
+      const auto f = filter_->Filter();
       if (f.updateCount > 200 && f.CalibrationHealthy()) carry_ = f;
+      // Hand the pose over to the new base through the room map instead of losing
+      // tracking until it bootstraps again (a headset turns its sensors away from the
+      // primary base all the time; each reset blanked the view for a moment).
+      const RoomBase* from = room_->Base(primary);
+      const RoomBase* to = room_->Base(visible);
+      std::optional<LighthouseDirect::Seed> seed;
+      if (from && to && carry_ && !std::getenv("LH_NO_REBASE")) {
+        const Eigen::Isometry3d toFromPrimary = to->worldFromBase.inverse() * from->worldFromBase;
+        LighthouseDirect::Seed s;
+        s.base = visible;
+        s.time = filter_->Time();
+        s.baseFromImu = toFromPrimary * BaseFromImu(f.x);
+        s.velocity = toFromPrimary.linear() * Eigen::Vector3d(f.x[3], f.x[4], f.x[5]);
+        s.angularVelocity = Eigen::Vector3d(f.x[13], f.x[14], f.x[15]);
+        // The room map's error between the two bases enters as pose uncertainty.
+        s.positionVariance = f.P(0, 0) + from->positionVariance + to->positionVariance;
+        s.rotationVariance = f.P(9, 9) + from->rotationVariance + to->rotationVariance;
+        s.velocityVariance = f.P(3, 3);
+        s.tilt = RoomTilt(*to);
+        s.tiltVariance = std::max(to->rotationVariance, 1e-6);
+        seed = s;
+      }
       ResetFilter();
       switchedAt_ = Now();
+      if (seed) {
+        seed->carry = &*carry_;
+        seed->calibrated = carry_->updateCount > 200;
+        if (filter_->SeedPose(*seed)) {
+          acquiredAt_ = Now();
+          calibratedLogged_ = seed->calibrated;
+          updatesAtAcquire_ = filter_->Filter().updateCount;
+          std::snprintf(text, sizeof text, "handed over to base %08X through the room map", visible);
+          Log(text);
+        }
+      }
       return;
     }
   }

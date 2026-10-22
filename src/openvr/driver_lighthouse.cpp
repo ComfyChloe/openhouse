@@ -36,6 +36,7 @@
 #include <thread>
 #include <vector>
 
+#include "stock_hmd.hpp"
 #include "lh/session.hpp"
 #include "hand_skeleton.hpp"
 #include "raw_alignment.hpp"
@@ -164,6 +165,14 @@ class Device : public ITrackedDeviceServerDriver {
     active_ = false;
     id_ = k_unTrackedDeviceIndexInvalid;
   }
+  // A device the host activated through another driver (a headset from the stock driver,
+  // stock_hmd.hpp): we only publish its pose; its properties are that driver's.
+  void AttachExternal(uint32_t objectId, const std::atomic<bool>* alive) {
+    id_ = objectId;
+    container_ = VRProperties()->TrackedDeviceToPropertyContainer(objectId);
+    externalAlive_ = alive;
+    active_ = true;
+  }
   void EnterStandby() override {
     if (info_.role == lh::DeviceRole::Controller || info_.role == lh::DeviceRole::Tracker) powerOffRequested_ = true;
   }
@@ -176,7 +185,7 @@ class Device : public ITrackedDeviceServerDriver {
     return pose_;
   }
 
-  bool Active() const { return active_; }
+  bool Active() const { return active_ && (!externalAlive_ || *externalAlive_); }
   const DeviceStatic& Info() const { return info_; }
   bool MatchesHaptic(const VREvent_t& event) const {
     return active_ && lh::openvr::MatchesHaptic(event, id_, container_, haptic_);
@@ -199,7 +208,7 @@ class Device : public ITrackedDeviceServerDriver {
 
   // Tracked devices: called from the driver thread with the latest liblh data.
   void Update(const lh::DeviceUpdate& u, double now) {
-    if (!active_) return;
+    if (!Active()) return;
     DriverPose_t p{};
     const Eigen::Quaterniond rawRotation(rawFromWorld_.rotation());
     p.qWorldFromDriverRotation = {rawRotation.w(), rawRotation.x(), rawRotation.y(), rawRotation.z()};
@@ -549,6 +558,7 @@ class Device : public ITrackedDeviceServerDriver {
   bool hadInput_ = false;
   DeviceStatic info_;
   std::atomic<bool> active_{false};
+  const std::atomic<bool>* externalAlive_ = nullptr;  // AttachExternal: the host still has it
   std::atomic<bool> powerOffRequested_{false};
   std::atomic<uint32_t> id_{k_unTrackedDeviceIndexInvalid};
   PropertyContainerHandle_t container_ = k_ulInvalidPropertyContainer;
@@ -584,6 +594,7 @@ class Provider : public IServerTrackedDeviceProvider {
  public:
   EVRInitError Init(IVRDriverContext* context) override {
     VR_INIT_SERVER_DRIVER_CONTEXT(context);
+    context_ = context;
     lh::SessionOptions options;
     if (const char* replay = std::getenv("LH_REPLAY")) options.replayPath = replay;
     if (const char* room = std::getenv("LH_ROOM_MAP")) options.roomMapPath = room;
@@ -644,9 +655,45 @@ class Provider : public IServerTrackedDeviceProvider {
       return VRInitError_Init_HmdNotFound;
     }
     Log("liblh session started (" + std::string(options.replayPath.empty() ? "live USB" : "replay " + options.replayPath) +
-        "); head-mounted displays are not exposed by this driver");
+        "); head-mounted displays: tracked by us, displayed through the stock driver when one is present");
     Log(std::string("input components through ") +
         (ComponentInput() != VRDriverInput() ? "IVRDriverInput_005" : IVRDriverInput_Version));
+    // A headset on USB: bring up the stock driver for its display now, inside the host's
+    // device discovery window.
+    using Presence = lh::openvr::StockHmd::Presence;
+    std::string which;
+    std::vector<std::string> maybe;
+    Presence presence = std::getenv("LH_NO_STOCK_HMD") ? Presence::No : lh::openvr::StockHmd::HeadsetPresent(&which, &maybe);
+    if (presence == Presence::Maybe) {
+      // Ask the device configs (role from device_class), up to 2 s: inside Monado's 3 s.
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(2000);
+      std::set<std::string> pending(maybe.begin(), maybe.end());
+      while (presence == Presence::Maybe && !pending.empty() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        for (const auto& d : session_->Snapshot().devices) {
+          if (!pending.count(d.info.serial)) continue;
+          pending.erase(d.info.serial);
+          if (d.info.role == lh::DeviceRole::Hmd) {
+            presence = Presence::Yes;
+            which = d.info.serial + " (headset by its config)";
+          }
+        }
+      }
+      if (presence != Presence::Yes) {
+        Log(pending.empty() ? "wired lighthouse devices are not headsets (by their configs)"
+                            : "no config from a wired lighthouse device within 2 s; not loading the stock driver now");
+        presence = Presence::No;
+      }
+    }
+    if (presence == Presence::Yes) {
+      triedStock_ = true;
+      const std::string path = lh::openvr::StockHmd::DefaultPath();
+      if (path.empty()) Log("headset " + which + " on USB, but no stock driver (driver_lighthouse.so.stock) to display it");
+      else {
+        Log("headset " + which + " on USB: loading the stock driver for its display");
+        stock_.Load(path, context_, [](const std::string& text) { Log(text); });
+      }
+    }
     stop_ = false;
     thread_ = std::thread([this] { Main(); });
     return VRInitError_None;
@@ -667,6 +714,7 @@ class Provider : public IServerTrackedDeviceProvider {
     { std::lock_guard lock(eventMutex_); hapticEvents_.clear(); }
     loggedHaptic_.clear();
     loggedUnrouted_ = false;
+    stock_.Cleanup();
     VR_CLEANUP_SERVER_DRIVER_CONTEXT();
   }
 
@@ -675,11 +723,21 @@ class Provider : public IServerTrackedDeviceProvider {
   void RunFrame() override {
     VREvent_t event;
     while (VRServerDriverHost()->PollNextEvent(&event, sizeof(event))) {
+      stock_.PushEvent(event);  // the stock driver (headset display) sees the host's events too
       if (event.eventType == VREvent_Input_HapticVibration) {
         std::lock_guard lock(eventMutex_);
         if (hapticEvents_.size() < 64) hapticEvents_.push_back(event);
       }
     }
+    // A headset is attached: bring up the stock driver for its display (host thread).
+    if (wantStock_ && !triedStock_) {
+      triedStock_ = true;
+      const std::string path = lh::openvr::StockHmd::DefaultPath();
+      if (std::getenv("LH_NO_STOCK_HMD")) Log("a head-mounted display is attached; LH_NO_STOCK_HMD: not exposed");
+      else if (path.empty()) Log("a head-mounted display is attached, but no stock driver (driver_lighthouse.so.stock) to display it");
+      else stock_.Load(path, context_, [](const std::string& text) { Log(text); });
+    }
+    stock_.RunFrame();
   }
 
   bool ShouldBlockStandbyMode() override { return false; }
@@ -752,6 +810,18 @@ class Provider : public IServerTrackedDeviceProvider {
         lastSnapshot_ = now;
         snapshot_ = session_->Snapshot();
         RegisterNewDevices();
+        for (const auto& d : snapshot_.devices)
+          if (d.info.role == lh::DeviceRole::Hmd && d.info.enabled && d.info.connected) wantStock_ = true;
+        while (const auto hmd = stock_.TakeActivated()) {
+          // The stock driver's headset is up: our tracking drives its pose.
+          DeviceStatic info{hmd->serial, {}, {}, {}, {}, lh::DeviceRole::Hmd, {}};
+          auto device = std::make_unique<Device>(info);
+          device->AttachExternal(hmd->objectId, hmd->alive);
+          devices_[hmd->serial] = std::move(device);
+          if (!std::getenv("LH_STOCK_HMD_POSE")) stock_.OwnPose(hmd->objectId);
+          Log("head-mounted display " + hmd->serial + ": pose from our tracking" +
+              (std::getenv("LH_STOCK_HMD_POSE") ? " (LH_STOCK_HMD_POSE: stock's)" : ""));
+        }
         const bool aligned = steamFrame_ ? alignment_.Update(snapshot_) : !snapshot_.roomId.empty();
         const Eigen::Isometry3d rawFromWorld = steamFrame_ ? alignment_.RawFromWorld() : hostFrame_.Update(snapshot_, now);
         if (steamFrame_ && !aligned && !snapshot_.roomId.empty() && snapshot_.roomId != warnedRoom_) {
@@ -820,6 +890,10 @@ class Provider : public IServerTrackedDeviceProvider {
   std::mutex eventMutex_;
   std::deque<VREvent_t> hapticEvents_;
   std::unique_ptr<lh::Session> session_;
+  IVRDriverContext* context_ = nullptr;
+  lh::openvr::StockHmd stock_;
+  std::atomic<bool> wantStock_{false};
+  bool triedStock_ = false;
   std::thread thread_;
   std::atomic<bool> stop_{false};
   std::map<std::string, std::unique_ptr<Device>> devices_;

@@ -27,7 +27,8 @@ Goals and constraints (from the owner):
 * Device roles come from each device's JSON config (`device_class`), never from the
   hardware: the owner maps some Index controllers and wands as generic trackers.
 * Only tracked devices matter (controllers, trackers, bases); no HMD display work.
-* Lighthouse 1.0 only. LH2 was researched and set aside: `driver/lh1_as_lh2_research.md`.
+* Lighthouse 1.0, and LH2 (2.0 base stations) in progress: `driver/lh2_support.md`. Making LH1
+  bases emit LH2-style light was researched and set aside: `driver/lh1_as_lh2_research.md`.
 * **Commit only when the owner asks.** Ask for hardware captures when a real-device test
   is needed; don't guess hardware behaviour.
 
@@ -108,6 +109,10 @@ Recently done (details in `driver/tracking_improvements.md`):
   (`platform::SleepFor`), MSVC build.
 
 Open:
+* **LH2 support** works on recordings; next: switch devices to LH2 light mode in the
+  driver, tune LH2 tracking, live test (`driver/lh2_support.md`). LH2 captures:
+  `~/lh-captures/session-20261022-170505Z-79354` (1 controller) and `-171923Z-81871` (5 devices).
+* HMD support plan (later): load the stock driver at runtime for the HMD's display only.
 * Wrong sync axis from slaves: fixed in lhbs (flash-end IRQ priority,
   `firmware/MULTISTATION.md`). Flash the fixed build to every slave; the driver's drop
   stays as a guard.
@@ -145,7 +150,7 @@ Open:
   `constants.md`, `tracking_improvements.md` (every change beyond stock, with numbers).
 * Runtime and host: `lh_runtime.md`, `runtime.md`, `interfaces.md`, `openvr_driver.md`,
   `windows_build.md`.
-* Research: `lh1_as_lh2_research.md`.
+* LH2: `lh2_support.md` (pipeline, results, open items). Research: `lh1_as_lh2_research.md`.
 
 `firmware/` (lhbs): `usage.md` (build, flash, console), `FIRMWARE_OVERVIEW.md`,
 `HARDWARE.md` (pin map, peripherals, verification log), `MULTISTATION.md` (TDM slots,

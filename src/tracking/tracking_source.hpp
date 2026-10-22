@@ -1,6 +1,6 @@
 // Per-device LH1 source: normalized transport events -> tracker input queues.
 // Port of the TDM path of CSwSyncDetectSource; no USB or host clock conversion.
-// See ai/driver/source_layer.md for intentionally omitted auto/LH2 paths.
+// LH2 words go to the sync-on-beam disambiguator (disambiguator_sob.hpp).
 #pragma once
 
 #include <deque>
@@ -8,6 +8,7 @@
 
 #include "lh/types.hpp"
 #include "tracking/disambiguator_multi.hpp"
+#include "tracking/disambiguator_sob.hpp"
 #include "tracking/disambiguator_tdm.hpp"
 
 namespace lh {
@@ -20,6 +21,9 @@ class TrackingSource {
 
   void OnImu(const ImuSample& sample);
   void OnLightPulse(const LightPulse& pulse);
+  // LH2 (2.0 base stations): device-decoded beam and sensor words.
+  void OnLh2BeamWord(const Lh2BeamWord& word);
+  void OnLh2SensorWord(const Lh2SensorWord& word);
 
   bool PopImu(ImuSample* out);
   bool PeekImuTime(DeviceTime* out) const;
@@ -31,6 +35,7 @@ class TrackingSource {
   // Fast base identification (see TdmDisambiguator::Identity).
   void SetKnownIdentities(std::vector<tdm::TdmDisambiguator::Identity> identities);
   bool PopIdentity(tdm::TdmDisambiguator::Identity* out);
+  void SetKnownSobChannels(const std::map<int, std::pair<BaseConfig, BaseDynamicState>>& channels);
 
  private:
   // The original stores float components, even though transport callbacks use doubles.
@@ -44,6 +49,8 @@ class TrackingSource {
   tdm::TdmDisambiguator tdm_;
   // Runs beside the stock disambiguator; takes over once it detects lhbs multi mode.
   tdm::MultiDisambiguator multi_;
+  // LH2 light; a device reports either LH1 pulses or LH2 words (its light mode).
+  sob::SobDisambiguator sob_;
   std::deque<QueuedImu> imu_;
   double latestImuTime_ = 0;
   double lastPulseImuTime_ = 0;

@@ -55,6 +55,8 @@ class OotxMajorityRing {
 
 // Searches the ring's bits (circularly) for a valid OOTX packet and decodes it.
 bool DecodeRing(const OotxMajorityRing& ring, BaseConfig* cfg, BaseDynamicState* dyn);
+// Decodes the packet a framer just completed (PushBit returned true).
+bool DecodeFramer(const OotxFramer& framer, BaseConfig* cfg, BaseDynamicState* dyn);
 
 // Field extraction from a CRC-checked payload (exposed for tests).
 void ParseBaseConfig(const uint8_t* payload, BaseConfig* cfg);
