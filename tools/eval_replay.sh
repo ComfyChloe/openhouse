@@ -10,7 +10,7 @@ i=0; t=0
 while [ "$(echo "$t < $len" | bc)" = 1 ]; do
   from=$(echo "$t - $lead" | bc); [ "$(echo "$from < 0" | bc)" = 1 ] && from=0
   name="$out/w$(printf %03d $i)-$t"
-  "$root"/build/lhtool session "$cap" --rate 1 --from "$from" --to "$(echo "$t + $win" | bc)" --trace "$name.jsonl" "$@" > "$name.events" 2>&1 &
+  "$root"/build-linux/lhtool session "$cap" --rate 1 --from "$from" --to "$(echo "$t + $win" | bc)" --trace "$name.jsonl" "$@" > "$name.events" 2>&1 &
   i=$((i + 1)); t=$(echo "$t + $win" | bc)
 done
 wait

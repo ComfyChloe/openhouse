@@ -26,7 +26,7 @@ here=$(cd "$(dirname "$0")/.." && pwd)
 
 case "${1:-status}" in
   install)
-    src="${2:-$here/build/openvr/lighthouse/bin/linux64/driver_lighthouse.so}"
+    src="${2:-$here/build-linux/openvr/lighthouse/bin/linux64/driver_lighthouse.so}"
     [[ -f "$src" ]] || { echo "driver not built: $src" >&2; exit 1; }
     if pgrep -x vrserver >/dev/null || pgrep -x monado-service >/dev/null; then
       echo "stop SteamVR / monado-service first" >&2; exit 1

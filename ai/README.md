@@ -72,7 +72,7 @@ Measure, don't reason. Replay captures with `tools/eval_replay.sh CAPTURE OUT 50
 COPY_OF_ROOMMAP` (parallel windows, prints valid/coast/lost %, jumps, jitter). **Always replay
 against a copy of the room map** (`~/.config/lh/roommap.json`, Windows
 `%APPDATA%\lh\roommap.json`); a replay can rewrite the map it is given. The script calls
-`build/lhtool`; point it at your build directory.
+`build-linux/lhtool` (the one Linux build directory).
 
 Captures (owner's machine; ask for them if absent):
 * `~/lh-captures/vrchat-01`: 10 min VRChat, 5 devices: the main regression capture.

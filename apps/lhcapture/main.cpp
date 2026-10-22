@@ -184,6 +184,19 @@ const std::vector<ModePhase> kModeTestPhases = {
   {20, "both_moving_mode1", 1, "All stations on. Now move the controllers around slowly."},
 };
 
+// --lh2: a guided recording for owners of 2.0 base stations, to build LH2 support from.
+// Every device is kept in LH2 light mode (they start in LH1 mode until a host switches
+// them). Still phases give reference poses, blocked phases each base alone.
+const std::vector<ModePhase> kLh2Phases = {
+  {20, "setup", 1, "Turn on all 2.0 base stations. Controllers/trackers on, in view of every station, held still."},
+  {20, "still_all", 1, "Put every device down, still, where all stations see it."},
+  {45, "moving", 1, "Pick them up and move around normally: high, low, turn them, walk the play area."},
+  {15, "still_block_one", 1, "Put them down again, still. Block ONE station with your body or a cloth."},
+  {15, "still_block_other", 1, "Unblock it. Block a DIFFERENT station."},
+  {30, "moving_fast", 1, "Unblock. Pick them up: fast swings and spins, then slow motion."},
+  {15, "still_end", 1, "Put every device down, still, in view of all stations."},
+};
+
 int Usage() {
   std::cout << "usage: lhcapture [OUTPUT_DIRECTORY] [--seconds N]\n"
                "       lhcapture --check [CAPTURE.lhraw] live (or recorded) sync-flash layout, records nothing\n"
@@ -194,7 +207,9 @@ int Usage() {
                "--config stores your firmware settings (e.g. \"multi N=4 slots 0,2 MASTER+ACTIVE\").\n"
                "       lhcapture OUTPUT_DIRECTORY --mode-test\n"
                "                                         guided ~4 min test for owners of both 1.0 and\n"
-               "                                         2.0 base stations (switches controllers' light mode)\n\n"
+               "                                         2.0 base stations (switches controllers' light mode)\n"
+               "       lhcapture OUTPUT_DIRECTORY --lh2\n"
+               "                                         guided ~2.5 min recording with 2.0 base stations\n\n"
                "Records all Lighthouse devices; no tracking estimator runs.\n"
                "Default output: captures/session-<UTC>-<pid>/\n"
                "Default duration: until Ctrl-C. Close SteamVR and turn the controller on.\n"
@@ -205,7 +220,7 @@ int Usage() {
 int Run(int argc, char** argv) {
   fs::path output;
   double seconds = 0;
-  bool check = false, modeTest = false;
+  bool check = false, modeTest = false, lh2 = false;
   std::string scenario, config;
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
@@ -218,6 +233,7 @@ int Run(int argc, char** argv) {
         throw std::runtime_error("invalid duration");
     } else if (arg == "--check") check = true;
     else if (arg == "--mode-test") modeTest = true;
+    else if (arg == "--lh2") modeTest = lh2 = true;
     else if (arg == "--scenario" || arg == "--config") {
       if (++i == argc) throw std::runtime_error(arg + " requires a value");
       (arg == "--scenario" ? scenario : config) = argv[i];
@@ -253,9 +269,10 @@ int Run(int argc, char** argv) {
     return 0;
   }
   if (!scenario.empty() && modeTest) throw std::runtime_error("--scenario and --mode-test are separate recordings");
+  const auto& modePhases = lh2 ? kLh2Phases : kModeTestPhases;
   if (!scenario.empty() || modeTest) {
     double total = 0;
-    if (modeTest) for (const auto& p : kModeTestPhases) total += p.seconds;
+    if (modeTest) for (const auto& p : modePhases) total += p.seconds;
     else for (const auto& p : kScenarioPhases) total += p.seconds;
     seconds = total;
   }
@@ -272,7 +289,7 @@ int Run(int argc, char** argv) {
     {"clock", "C++ steady_clock seconds; same host clock as raw reports"},
     {"requested_seconds", seconds}, {"devices", Json::array()}};
   if (!scenario.empty()) session["scenario"] = scenario;
-  if (modeTest) session["scenario"] = "mode-test";
+  if (modeTest) session["scenario"] = lh2 ? "lh2" : "mode-test";
   if (!config.empty()) session["firmware_config"] = config;
   const fs::path cache = lh::platform::SteamConfigDirectory();
   const auto database = cache / "lighthousedb.json";
@@ -281,6 +298,12 @@ int Run(int argc, char** argv) {
     fs::copy_file(database, path / "lighthousedb.json", fs::copy_options::none, copyError);
     if (!copyError) session["database_file"] = "lighthousedb.json";
     else session["database_snapshot_error"] = copyError.message();
+  }
+  // SteamVR's chaperone: its own solved base station poses, a reference for ours.
+  const auto chaperone = cache / "chaperone_info.vrchap";
+  if (fs::exists(chaperone, copyError)) {
+    fs::copy_file(chaperone, path / "chaperone_info.vrchap", fs::copy_options::none, copyError);
+    if (!copyError) session["chaperone_file"] = "chaperone_info.vrchap";
   }
   Save(path / "session.json", session);
   std::ofstream markers(path / "markers.jsonl");
@@ -353,20 +376,23 @@ int Run(int argc, char** argv) {
         for (const auto& serial : counters.Attached()) transport.SetOpticalSubProtocol(serial, mode);
         mark("optical_mode:" + std::to_string(mode));
       };
-      if (phase < kModeTestPhases.size() && Now() >= phaseEnd) {
-        const auto& p = kModeTestPhases[phase++];
+      if (phase < modePhases.size() && Now() >= phaseEnd) {
+        const auto& p = modePhases[phase++];
         phaseEnd = Now() + p.seconds;
         mark(std::string("phase:") + p.name);
         modePhase = p.mode;
         toggleMode = 0;
         nextToggle = Now() + 1;
         setMode(p.mode < 0 ? 0 : p.mode);
-        std::cout << "\a\n>>> [" << phase << "/" << kModeTestPhases.size() << "] " << p.instruction << " ("
+        std::cout << "\a\n>>> [" << phase << "/" << modePhases.size() << "] " << p.instruction << " ("
                   << p.seconds << " s)\n\n" << std::flush;
       } else if (modePhase < 0 && Now() >= nextToggle) {
         toggleMode ^= 1;
         setMode(toggleMode);
         nextToggle = Now() + 1;
+      } else if (lh2 && Now() >= nextToggle) {  // devices turned on late join too
+        setMode(1);
+        nextToggle = Now() + 5;
       }
     }
     if (Now() >= nextStatus) {
@@ -401,17 +427,19 @@ int Run(int argc, char** argv) {
   session["stop_host_time"] = Now(); session["stop_unix_time"] = UnixNow();
   session["reader_seconds"] = Now() - ready;
   session["stop_reason"] = stopped ? "signal" : (healthy ? "duration" : "write_error");
-  bool hasImu = false, hasLight = false;
+  bool hasImu = false, hasLight = false, hasLh2 = false;
   for (const auto& d : session["devices"]) {
     hasImu = hasImu || d["imu_samples"].get<uint64_t>() > 0;
     hasLight = hasLight || d["light_pulses"].get<uint64_t>() > 0;
+    hasLh2 = hasLh2 || d["lh2_words"].get<uint64_t>() > 0;
   }
-  session["has_imu"] = hasImu; session["has_lh1_light"] = hasLight;
+  session["has_imu"] = hasImu; session["has_lh1_light"] = hasLight; session["has_lh2_light"] = hasLh2;
+  if (lh2) hasLight = hasLh2;
   session["status"] = healthy ? "complete" : "failed";
   if (!healthy) session["error"] = "raw capture write/flush failed; file may be incomplete";
   Save(path / "session.json", session);
   std::cout << (healthy ? "Saved: " : "CAPTURE FAILED: ") << path << '\n';
-  if (!hasImu || !hasLight) std::cerr << "Warning: missing IMU or LH1 light input; keep this session but check that the controller/bases were on.\n";
+  if (!hasImu || !hasLight) std::cerr << "Warning: missing IMU or " << (lh2 ? "LH2" : "LH1") << " light input; keep this session but check that the controller/bases were on.\n";
   if (!healthy) throw std::runtime_error("capture write/flush failure");
   return hasImu && hasLight ? 0 : 1;
 }
