@@ -108,9 +108,9 @@ Recently done (details in `driver/tracking_improvements.md`):
   (`platform::SleepFor`), MSVC build.
 
 Open:
-* **Slave firmware sends the wrong sync axis** (up to 10 % of a slave's sweeps, now dropped
-  by the driver): root cause in lhbs slave timing, needs a base on the console.
-  `firmware/MULTISTATION.md`. Slaves also still need reflashing with the latest build.
+* Wrong sync axis from slaves: fixed in lhbs (flash-end IRQ priority,
+  `firmware/MULTISTATION.md`). Flash the fixed build to every slave; the driver's drop
+  stays as a guard.
 * Live check of the input path under Monado: the driver logs `input components through
   IVRDriverInput_005` or `_004`; confirm buttons work.
 * The Windows build installed on the owner's PC predates the latest fixes (axis drop,

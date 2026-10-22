@@ -149,7 +149,7 @@ static void index_edge(int r, uint32_t t)
     int bit = timebase_flash_this_rev() ? ootx_next_bit() : 0;
     uint32_t w = ootx_pulse_width(r, bit, timebase_skip());
     lpc_timer_t *tm = TMR_CT32B0;
-    if (t + w < tm->TC + 250) {                 /* too late: end the flash now */
+    if ((int32_t)(t + w - tm->TC) < 250) {      /* too late: end the flash now */
         tm->EMR |= 1;
         tm->EMR &= ~1u;
         sync_late_count++;
@@ -290,6 +290,12 @@ void rotor_init(void)
         rotor[r].coarse_acc = (float)*cfg[r].pwm;
         rotor[r].fine_avg = 2047.0f;
     }
-    nvic_set_priority(18, 2);           /* stock: CT32B0 priority 2 */
+    /* lhbs: CT32B0 above CT32B1 (stock: 2, below it). A sync flash ends in this
+     * handler (MR0 is set on the index capture), so it must not wait: a slave
+     * processing the master's flash in CT32B1 (phase loop, soft float, up to 175 us)
+     * delayed slot 2's next index event, 250 us later, by up to 170 us, past the end
+     * of its 62.5 us flash: the flash came out 59-69 us and decoded as the wrong axis
+     * (ai/firmware/MULTISTATION.md). CT32B1 captures are latched by hardware. */
+    nvic_set_priority(18, 0);
     NVIC_ISER = 1u << 18;
 }

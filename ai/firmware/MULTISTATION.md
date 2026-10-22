@@ -273,29 +273,23 @@ stuck at 4). Flashing now needs only the master's phase held; the round confirma
 gates sweeping alone. Slaves also wake from stand-by on their own once locked onto a
 master again, and don't time out to stand-by while they hear one.
 
-## Open issue: slaves flash the wrong sync axis (2026-10-22)
+## Fixed: slaves flashed the wrong sync axis (2026-10-22)
 
-Seen from the driver in Beat Saber captures (`/mnt/lh-captures/beatsaber-01-2`): a slave
-sometimes flashes an **axis-1 sync (clean width, e.g. 74.2 us vs nominal 74.9) while its
-laser sweeps axis 0**. The sensors' angles equal those of its previous axis-0 sweep, so
-the light is axis 0 and only the label is wrong. Rates per base over 5 minutes:
+Seen from the driver in Beat Saber captures: a slave's first sweeping flash of its turn
+sometimes decoded as axis 1 while its laser swept axis 0 (A101B835 ~9.5 % of sweeps,
+89AE90F2 4.8 %, D7B1AD76 1.5 %). The driver drops such sweeps (`disambiguator_multi.cpp`,
+`LH_DEBUG_AXIS=1`).
 
-| Base | Slot | Sweeps dropped by the driver |
-|---|---|---|
-| E236DC40 | 1 (master) | 0 |
-| A101B835 | 2 | ~838 of 8850 (9.5 %) |
-| 89AE90F2 | 4 | ~422 (4.8 %) |
-| D7B1AD76 | 3 | ~135 (1.5 %) |
+Cause, measured on A101B835 (slot 2) with an instrumented build: the flash ends in the
+CT32B0 handler (index capture -> MR0 = t + width), which ran at priority 2, below CT32B1.
+A slave's CT32B1 handler, processing the master's axis-0 flash (`corr_callback`, soft
+float), ran up to 175 us; slot 2's rotor-0 index comes 250 us after the master's flash,
+so its handler started up to 168 us late (1409 late syncs in 9 min). The shortest flash
+(axis 0, data 0, 62.5 us) then ended early or late (59-69 us measured), and widths past
+~68 us decode as axis 1. Rotor 1 was unaffected (axis-1 master flashes skip the phase
+loop), and later slots have more slack (750 us for slot 4). The light itself was right.
 
-Mostly at the start of a station's turn (first flash labelled 1, the next one correctly
-1); 13 of 361 drops back to back. The flash width is the rotor whose index fired
-(`index_edge` -> `ootx_pulse_width(r, ...)`), so the likely cause is slave timing: the
-turn window (`timebase_flash_this_rev`, emission gate P1_0) opening on rotor 1's index
-instead of rotor 0's, or the slave's rotor phase drifting against the master's. Checked
-and ruled out: `optical_edge`'s "axis-0 syncs only" filter (types 2/3/6/7 are axis 0).
-
-The driver now drops such sweeps (`disambiguator_multi.cpp`, `LH_DEBUG_AXIS=1`), so this
-no longer throws controllers, but the bases lose up to 10 % of their sweeps. To find it
-on the bench: on a slave's console, trace per flash the rotor (0/1), the turn index and
-the emission-gate state, and compare with the master's axis-0 sync times. Also still
-pending: reflash all slaves with the latest lhbs build.
+Fix (`rotor.c`): CT32B0 at priority 0, above CT32B1 (CT32B1 captures are latched in
+hardware, so they can wait). Also the "too late" check compares wrap-safe. After: max
+index latency 34 us, 0 late syncs, 0 dropped sweeps in 60 s (was 53). Flash every slave
+with this build.
