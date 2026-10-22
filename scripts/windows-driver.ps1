@@ -34,7 +34,17 @@ if (Get-Process -Name vrserver,monado-service -ErrorAction SilentlyContinue) {
 }
 if ($Action -eq 'Install') {
     if (-not (Test-Path $DriverPath)) { throw "Package DLL missing: $DriverPath" }
-    if (-not (Test-Path $backup)) { Copy-Item -LiteralPath $target -Destination $backup }
+    # The stock DLL is kept as driver_lighthouse.dll.stock: our driver loads it at run time
+    # for headset displays. Back up whatever is installed unless it is ours (a SteamVR
+    # update puts a newer stock DLL in place: that one replaces an older backup).
+    $installed = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($target))
+    $isOurs = $installed.Contains('liblh session started')
+    if (-not $isOurs) {
+        Copy-Item -LiteralPath $target -Destination $backup -Force
+        Write-Output "Saved SteamVR's driver as $backup"
+    } elseif (-not (Test-Path $backup)) {
+        throw "The installed driver is already lhdrvrw's and there is no stock backup ($backup). Verify SteamVR's files in Steam, then install again."
+    }
     $source = $DriverPath
 } else {
     if (-not (Test-Path $backup)) { throw "Stock backup missing: $backup" }

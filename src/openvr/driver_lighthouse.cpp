@@ -37,6 +37,14 @@
 #include <vector>
 
 #include "stock_hmd.hpp"
+
+namespace {
+#ifdef _WIN32
+constexpr const char* kStockFile = "driver_lighthouse.dll.stock";
+#else
+constexpr const char* kStockFile = "driver_lighthouse.so.stock";
+#endif
+}  // namespace
 #include "lh/session.hpp"
 #include "hand_skeleton.hpp"
 #include "raw_alignment.hpp"
@@ -676,6 +684,7 @@ class Provider : public IServerTrackedDeviceProvider {
           if (d.info.role == lh::DeviceRole::Hmd) {
             presence = Presence::Yes;
             which = d.info.serial + " (headset by its config)";
+            lh::openvr::StockHmd::AllowHeadset(d.info.serial);
           }
         }
       }
@@ -688,7 +697,7 @@ class Provider : public IServerTrackedDeviceProvider {
     if (presence == Presence::Yes) {
       triedStock_ = true;
       const std::string path = lh::openvr::StockHmd::DefaultPath();
-      if (path.empty()) Log("headset " + which + " on USB, but no stock driver (driver_lighthouse.so.stock) to display it");
+      if (path.empty()) Log("headset " + which + " on USB, but no stock driver (" + std::string(kStockFile) + ") to display it");
       else {
         Log("headset " + which + " on USB: loading the stock driver for its display");
         stock_.Load(path, context_, [](const std::string& text) { Log(text); });
@@ -734,7 +743,7 @@ class Provider : public IServerTrackedDeviceProvider {
       triedStock_ = true;
       const std::string path = lh::openvr::StockHmd::DefaultPath();
       if (std::getenv("LH_NO_STOCK_HMD")) Log("a head-mounted display is attached; LH_NO_STOCK_HMD: not exposed");
-      else if (path.empty()) Log("a head-mounted display is attached, but no stock driver (driver_lighthouse.so.stock) to display it");
+      else if (path.empty()) Log("a head-mounted display is attached, but no stock driver (" + std::string(kStockFile) + ") to display it");
       else stock_.Load(path, context_, [](const std::string& text) { Log(text); });
     }
     stock_.RunFrame();

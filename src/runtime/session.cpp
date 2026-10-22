@@ -426,7 +426,6 @@ void SessionImpl::ReplayMain() {
                    if (trace && !warming_ && r.hostTime >= nextTrace) {
                      nextTrace = std::max(nextTrace + 1.0 / options_.replayTraceRate, r.hostTime);
                      for (const auto& u : Updates()) {
-                       if (u.role == DeviceRole::Hmd) continue;
                        const auto& p = u.pose;
                        std::fprintf(trace,
                                     "{\"t\":%.6f,\"serial\":\"%s\",\"valid\":%d,\"state\":\"%s\",\"result\":%d,"
@@ -582,6 +581,14 @@ void SessionImpl::UpdateLightMode(const DeviceId& id, Device& d) {
   if (seenLh1 != seenLh2) {
     const int want = seenLh2 ? 1 : 0;
     if (want != d.lightMode) set(want, "room's bases");
+    else if (now_ - d.modeSince >= kResend) set(want, "re-send");
+    return;
+  }
+  if (knownLh2 != knownLh1 && !seenLh1 && !seenLh2) {
+    // Nothing seen yet, but the room is known to be one kind: stay in its mode (an
+    // occluded device would otherwise spend seconds in the wrong one).
+    const int want = knownLh2 ? 1 : 0;
+    if (want != d.lightMode) set(want, "room's bases (known)");
     else if (now_ - d.modeSince >= kResend) set(want, "re-send");
     return;
   }

@@ -482,12 +482,21 @@ void RoomMap::Observe(const std::string& device, uint32_t primary, uint32_t alt,
   if (!uncertain && (dp > 0.10 || dr > 0.0523599)) {
     if (++target->inconsistent >= 10) {
       char text[200];
-      std::snprintf(text, sizeof text, "Base %08X disagrees with the room map by %.0fmm / %.1f deg; relearning it",
-                    target->serial, dp * 1000, dr * 57.29577951308232);
+      static const bool steps = std::getenv("LH_ROOM_STEPS") != nullptr;  // old behaviour (A/B)
+      std::snprintf(text, sizeof text, "Base %08X disagrees with the room map by %.0fmm / %.1f deg; relearning it%s",
+                    target->serial, dp * 1000, dr * 57.29577951308232, steps ? "" : " (solver re-solves it)");
       Log(text);
-      target->worldFromBase = measured;
-      target->positionVariance = mpv;
-      target->rotationVariance = mrv;
+      if (steps) {
+        target->worldFromBase = measured;
+        target->positionVariance = mpv;
+        target->rotationVariance = mrv;
+      } else {
+        // One device's filter (a drifting or occluded one: live, a headset 4-5 deg off)
+        // must not rewrite the room on its own: the base stays, uncertain, and the
+        // solver places it again from every device's fresh keyframes, gliding there.
+        target->positionVariance = std::max(target->positionVariance, 0.02);
+        target->rotationVariance = std::max(target->rotationVariance, 0.0523599 * 0.0523599);
+      }
       target->inconsistent = 0;
       target->solved = false;
       relearned_.push_back(target->serial);
@@ -687,11 +696,20 @@ void RoomMap::ApplySolved(uint32_t serial, const Eigen::Isometry3d& pose, double
   // (a knocked base mostly turns on its mount: 1 deg is 9 cm at 5 m).
   if (FarOff(serial, pose, pv, rv)) {
     if (++b.inconsistent < 3) return;
-    std::snprintf(text, sizeof text, "Room solver: base %08X moved by %.1f mm, %.2f deg (%d keyframes, rms %.0f urad, sigma %.1f mm)",
-                  serial, dp * 1000, dr * 57.29577951308232, keyframes, rms * 1e6, std::sqrt(pv / 3) * 1000);
+    // A knock (20 cm, 3 deg) is taken at once: light against the old place is wrong.
+    // Less (an imported room's error, a slow drift) glides there, as every other solve:
+    // a step moves every device on this base at once (live: a 10 cm head shift).
+    const bool knock = dp > 0.20 || dr > 0.0523599 || std::getenv("LH_ROOM_STEPS");
+    std::snprintf(text, sizeof text, "Room solver: base %08X moved by %.1f mm, %.2f deg (%d keyframes, rms %.0f urad, sigma %.1f mm)%s",
+                  serial, dp * 1000, dr * 57.29577951308232, keyframes, rms * 1e6, std::sqrt(pv / 3) * 1000,
+                  knock ? "" : "; gliding there");
     Log(text);
-    b.worldFromBase = pose;
-    solvedTarget_.erase(serial);
+    if (knock) {
+      b.worldFromBase = pose;
+      solvedTarget_.erase(serial);
+    } else {
+      solvedTarget_[serial] = pose;
+    }
     b.positionVariance = std::max(pv, kFloorVariance);
     b.rotationVariance = std::max(rv, 1e-9);
     b.observations = keyframes;

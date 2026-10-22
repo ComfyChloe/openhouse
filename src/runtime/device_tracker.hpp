@@ -136,6 +136,10 @@ class DeviceTracker {
   Eigen::Quaterniond offsetQ_ = Eigen::Quaterniond::Identity();
   struct CoastAnchor { Eigen::Vector3d position, velocity; double time; };
   std::optional<CoastAnchor> coastAnchor_;
+  // When the filter last took light, in IMU time (Now()). Not the light's own time: LH2
+  // frames reach the filter ~50-100 ms after their sweep (a revolution closes on the
+  // next beam word, then frames are held to merge channels), which read as darkness.
+  double lastOpticalTaken_ = -1e300, lastOpticalSeen_ = -1e300;
   bool holdStill_ = true, still_ = false, haveAccelMean_ = false;
   Eigen::Vector3d accelMean_ = Eigen::Vector3d::Zero();
   std::optional<double> quietSince_;

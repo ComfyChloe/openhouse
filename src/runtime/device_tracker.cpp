@@ -747,7 +747,13 @@ void DeviceTracker::UpdateOutput() {
     return;
   }
   heldPose_.reset();
-  const double dark = Now() - filter_->LastOpticalTime();
+  if (filter_->LastOpticalTime() != lastOpticalSeen_) {
+    lastOpticalSeen_ = filter_->LastOpticalTime();
+    lastOpticalTaken_ = Now();
+  }
+  static const bool byLightTime = std::getenv("LH_DARK_BY_LIGHT_TIME") != nullptr;  // old behaviour (A/B)
+  const double dark = byLightTime ? Now() - filter_->LastOpticalTime()
+                                  : std::min(Now() - filter_->LastOpticalTime(), Now() - lastOpticalTaken_);
   // A lone multi-station base sweeps every N revolutions (66 ms at N = 4): that is
   // not darkness yet.
   if (dark > std::max(kCoastAfter, 1.25 * sweepInterval_)) {

@@ -1,24 +1,285 @@
 #include "stock_hmd.hpp"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <cwchar>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 
 #include <nlohmann/json.hpp>
 
-#include <hidapi.h>
+#include <hidapi/hidapi.h>
+
+#include <cstring>
 
 #ifdef _WIN32
 #include <windows.h>
+#include <setupapi.h>
+extern "C" {
+#include <hidsdi.h>
+}
 #else
 #include <dlfcn.h>
+#include <elf.h>
+#include <link.h>
+#include <sys/mman.h>
+#include <unistd.h>
 #endif
 
 namespace lh::openvr {
 
 using namespace vr;
+
+namespace {
+std::mutex g_openMutex;
+std::set<std::string> g_allowedHeadsets;  // wired 0x2300 serials, upper case
+std::set<std::string> g_deniedLogged;
+std::function<void(const std::string&)> g_openLog;
+
+std::string Upper(std::string s) {
+  for (auto& c : s) c = char(std::toupper(static_cast<unsigned char>(c)));
+  return s;
+}
+
+// Logs once per device that the stock driver doesn't get to see.
+void LogHidden(const std::string& device) {
+  std::function<void(const std::string&)> log;
+  {
+    std::lock_guard lock(g_openMutex);
+    if (g_deniedLogged.insert(device).second) log = g_openLog;
+  }
+  if (log) log("stock driver: hiding " + device + " from it (not the headset)");
+}
+}  // namespace
+
+#ifndef _WIN32
+namespace {
+
+// /dev/hidrawN -> whether the stock driver may open it.
+bool StockMayOpen(const char* path) {
+  if (!path || std::strncmp(path, "/dev/hidraw", 11) != 0) return true;
+  std::ifstream uevent(std::string("/sys/class/hidraw/") + (path + 5) + "/device/uevent");
+  unsigned bus = 0, vid = 0, pid = 0;
+  std::string uniq, line;
+  while (std::getline(uevent, line)) {
+    if (line.rfind("HID_ID=", 0) == 0) std::sscanf(line.c_str() + 7, "%x:%x:%x", &bus, &vid, &pid);
+    else if (line.rfind("HID_UNIQ=", 0) == 0) uniq = Upper(line.substr(9));
+  }
+  if (vid != 0x28de) return true;
+  if (pid == 0x2101 || pid == 0x2102) return false;  // dongles: ours only
+  if (pid != 0x2300) return true;
+  std::lock_guard lock(g_openMutex);
+  return g_allowedHeadsets.count(uniq) > 0 || g_allowedHeadsets.count("*") > 0;
+}
+
+// The stock driver finds devices only by enumerating udev (no hotplug monitor; it
+// rescans), so hiding entries there keeps it away from them. Refusing its open() of a
+// device it already found is not an option: it crashes on the failure.
+struct udev_list_entry;
+using GetNext = udev_list_entry* (*)(udev_list_entry*);
+using GetName = const char* (*)(udev_list_entry*);
+using GetFirst = udev_list_entry* (*)(void*);
+GetNext g_realNext = nullptr;
+GetFirst g_realFirst = nullptr;
+GetName g_name = nullptr;
+
+bool Hidden(udev_list_entry* entry) {
+  const char* syspath = g_name ? g_name(entry) : nullptr;
+  if (!syspath) return false;
+  const char* slash = std::strrchr(syspath, '/');
+  const std::string node = slash ? slash + 1 : syspath;
+  if (node.rfind("hidraw", 0) != 0) return false;
+  const std::string dev = "/dev/" + node;
+  if (StockMayOpen(dev.c_str())) return false;
+  LogHidden(dev);
+  return true;
+}
+
+udev_list_entry* SkipHidden(udev_list_entry* entry) {
+  while (entry && Hidden(entry)) entry = g_realNext(entry);
+  return entry;
+}
+udev_list_entry* StockNext(udev_list_entry* entry) { return SkipHidden(g_realNext(entry)); }
+udev_list_entry* StockFirst(void* enumerate) { return SkipHidden(g_realFirst(enumerate)); }
+
+// Points the library's import `name` (its GOT slot; RTLD_NOW has bound it) at `hook`;
+// returns the original target, or nullptr.
+void* HookImport(void* library, const char* name, void* hook) {
+  link_map* map = nullptr;
+  if (dlinfo(library, RTLD_DI_LINKMAP, &map) != 0 || !map) return nullptr;
+  const auto base = static_cast<uintptr_t>(map->l_addr);
+  auto at = [base](uintptr_t p) { return p < base ? p + base : p; };  // ld.so may have relocated it
+  const ElfW(Rela)* rela = nullptr;
+  size_t relaSize = 0;
+  const ElfW(Sym)* symbols = nullptr;
+  const char* strings = nullptr;
+  for (const ElfW(Dyn)* d = map->l_ld; d->d_tag != DT_NULL; ++d) {
+    if (d->d_tag == DT_JMPREL) rela = reinterpret_cast<const ElfW(Rela)*>(at(d->d_un.d_ptr));
+    else if (d->d_tag == DT_PLTRELSZ) relaSize = d->d_un.d_val;
+    else if (d->d_tag == DT_SYMTAB) symbols = reinterpret_cast<const ElfW(Sym)*>(at(d->d_un.d_ptr));
+    else if (d->d_tag == DT_STRTAB) strings = reinterpret_cast<const char*>(at(d->d_un.d_ptr));
+  }
+  if (!rela || !symbols || !strings) return nullptr;
+  for (size_t i = 0; i < relaSize / sizeof(ElfW(Rela)); ++i) {
+    const auto& r = rela[i];
+    if (ELF64_R_TYPE(r.r_info) != R_X86_64_JUMP_SLOT) continue;
+    if (std::strcmp(strings + symbols[ELF64_R_SYM(r.r_info)].st_name, name) != 0) continue;
+    auto* slot = reinterpret_cast<void**>(base + r.r_offset);
+    const long page = sysconf(_SC_PAGESIZE);
+    const auto pageStart = reinterpret_cast<uintptr_t>(slot) & ~uintptr_t(page - 1);
+    // The page's protection as mapped: RELRO leaves it read-only, but the same page
+    // can hold writable data too (the stock driver's .data starts on it).
+    int prot = PROT_READ;
+    {
+      std::ifstream maps("/proc/self/maps");
+      std::string line;
+      while (std::getline(maps, line)) {
+        unsigned long lo = 0, hi = 0;
+        char perms[5] = {};
+        if (std::sscanf(line.c_str(), "%lx-%lx %4s", &lo, &hi, perms) != 3 || pageStart < lo || pageStart >= hi) continue;
+        prot = (perms[0] == 'r' ? PROT_READ : 0) | (perms[1] == 'w' ? PROT_WRITE : 0) | (perms[2] == 'x' ? PROT_EXEC : 0);
+        break;
+      }
+    }
+    void* start = reinterpret_cast<void*>(pageStart);
+    if (!(prot & PROT_WRITE) && mprotect(start, size_t(page), prot | PROT_WRITE) != 0) return nullptr;
+    void* original = *slot;
+    *slot = hook;
+    if (!(prot & PROT_WRITE)) mprotect(start, size_t(page), prot);
+    return original;
+  }
+  return nullptr;
+}
+
+// Hides every lighthouse device but the headset from the stock driver's device scans.
+bool HideOtherDevices(void* library) {
+  g_name = reinterpret_cast<GetName>(dlsym(RTLD_DEFAULT, "udev_list_entry_get_name"));
+  if (!g_name) return false;
+  void* next = HookImport(library, "udev_list_entry_get_next", reinterpret_cast<void*>(&StockNext));
+  if (!next) return false;
+  g_realNext = reinterpret_cast<GetNext>(next);
+  void* first = HookImport(library, "udev_enumerate_get_list_entry", reinterpret_cast<void*>(&StockFirst));
+  if (!first) return false;
+  g_realFirst = reinterpret_cast<GetFirst>(first);
+  return true;
+}
+}  // namespace
+#else
+namespace {
+// Windows: the stock DLL lists HID devices with SetupDiEnumDeviceInterfaces /
+// SetupDiGetDeviceInterfaceDetailA (paths "\\?\hid#vid_28de&pid_2101&...") and opens
+// them with CreateFileA. Its enumeration skips every lighthouse device but the headset,
+// as on Linux (refusing the open instead crashes the Linux build of it).
+using EnumInterfaces = BOOL(WINAPI*)(HDEVINFO, PSP_DEVINFO_DATA, const GUID*, DWORD, PSP_DEVICE_INTERFACE_DATA);
+using InterfaceDetailA = BOOL(WINAPI*)(HDEVINFO, PSP_DEVICE_INTERFACE_DATA, PSP_DEVICE_INTERFACE_DETAIL_DATA_A, DWORD,
+                                       PDWORD, PSP_DEVINFO_DATA);
+EnumInterfaces g_realEnum = nullptr;
+InterfaceDetailA g_realDetail = nullptr;
+
+unsigned HexAfter(const std::string& path, const char* key) {
+  const auto at = path.find(key);
+  return at == std::string::npos ? 0 : unsigned(std::strtoul(path.c_str() + at + std::strlen(key), nullptr, 16));
+}
+
+// The device's USB serial ("LHR-0053AF37"), opened without access rights.
+std::string SerialOf(const char* path) {
+  HANDLE h = CreateFileA(path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+  if (h == INVALID_HANDLE_VALUE) return {};
+  wchar_t serial[128] = {};
+  const BOOL ok = HidD_GetSerialNumberString(h, serial, sizeof serial);
+  CloseHandle(h);
+  if (!ok) return {};
+  char out[128];
+  std::snprintf(out, sizeof out, "%ls", serial);
+  return Upper(out);
+}
+
+bool StockMayUse(const char* devicePath) {
+  if (!devicePath) return true;
+  const std::string path = Upper(devicePath);
+  if (HexAfter(path, "VID_") != 0x28de) return true;
+  const unsigned pid = HexAfter(path, "PID_");
+  if (pid == 0x2101 || pid == 0x2102) return false;  // dongles: ours only
+  if (pid != 0x2300) return true;
+  {
+    std::lock_guard lock(g_openMutex);
+    if (g_allowedHeadsets.count("*")) return true;
+  }
+  const std::string serial = SerialOf(devicePath);
+  std::lock_guard lock(g_openMutex);
+  return g_allowedHeadsets.count(serial) > 0;
+}
+
+// Whether interface `index` of the set is hidden; reads its path with the real detail call.
+bool HiddenInterface(HDEVINFO set, PSP_DEVICE_INTERFACE_DATA data) {
+  DWORD size = 0;
+  g_realDetail(set, data, nullptr, 0, &size, nullptr);
+  if (size == 0 || size > 4096) return false;
+  alignas(8) char buffer[4096];
+  auto* detail = reinterpret_cast<PSP_DEVICE_INTERFACE_DETAIL_DATA_A>(buffer);
+  detail->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_A);
+  if (!g_realDetail(set, data, detail, size, nullptr, nullptr)) return false;
+  if (StockMayUse(detail->DevicePath)) return false;
+  LogHidden(detail->DevicePath);
+  return true;
+}
+
+// Index `wanted` among the visible interfaces: the caller counts 0, 1, 2... until it fails.
+BOOL WINAPI StockEnumInterfaces(HDEVINFO set, PSP_DEVINFO_DATA info, const GUID* guid, DWORD wanted,
+                                PSP_DEVICE_INTERFACE_DATA data) {
+  DWORD visible = 0;
+  for (DWORD real = 0;; ++real) {
+    if (!g_realEnum(set, info, guid, real, data)) return FALSE;  // its error (no more items)
+    if (HiddenInterface(set, data)) continue;
+    if (visible++ == wanted) return TRUE;
+  }
+}
+
+// Points the module's import `dll`!`name` (its IAT slot) at `hook`; returns the original.
+void* HookImport(HMODULE module, const char* dll, const char* name, void* hook) {
+  auto* base = reinterpret_cast<uint8_t*>(module);
+  auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(base);
+  if (dos->e_magic != IMAGE_DOS_SIGNATURE) return nullptr;
+  auto* nt = reinterpret_cast<IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+  const auto& dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+  if (!dir.VirtualAddress) return nullptr;
+  for (auto* imp = reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(base + dir.VirtualAddress); imp->Name; ++imp) {
+    if (_stricmp(reinterpret_cast<const char*>(base + imp->Name), dll) != 0) continue;
+    auto* names = reinterpret_cast<IMAGE_THUNK_DATA*>(base + (imp->OriginalFirstThunk ? imp->OriginalFirstThunk : imp->FirstThunk));
+    auto* slots = reinterpret_cast<IMAGE_THUNK_DATA*>(base + imp->FirstThunk);
+    for (; names->u1.AddressOfData; ++names, ++slots) {
+      if (IMAGE_SNAP_BY_ORDINAL(names->u1.Ordinal)) continue;
+      auto* byName = reinterpret_cast<IMAGE_IMPORT_BY_NAME*>(base + names->u1.AddressOfData);
+      if (std::strcmp(reinterpret_cast<const char*>(byName->Name), name) != 0) continue;
+      DWORD old = 0;
+      if (!VirtualProtect(&slots->u1.Function, sizeof(void*), PAGE_READWRITE, &old)) return nullptr;
+      void* original = reinterpret_cast<void*>(slots->u1.Function);
+      slots->u1.Function = reinterpret_cast<ULONG_PTR>(hook);
+      VirtualProtect(&slots->u1.Function, sizeof(void*), old, &old);
+      return original;
+    }
+  }
+  return nullptr;
+}
+
+bool HideOtherDevices(HMODULE module) {
+  g_realDetail = reinterpret_cast<InterfaceDetailA>(
+      reinterpret_cast<void*>(GetProcAddress(GetModuleHandleA("setupapi.dll"), "SetupDiGetDeviceInterfaceDetailA")));
+  if (!g_realDetail) return false;
+  void* real = HookImport(module, "SETUPAPI.dll", "SetupDiEnumDeviceInterfaces", reinterpret_cast<void*>(&StockEnumInterfaces));
+  if (!real) return false;
+  g_realEnum = reinterpret_cast<EnumInterfaces>(real);
+  return true;
+}
+}  // namespace
+#endif
+
+void StockHmd::AllowHeadset(const std::string& serial) {
+  std::lock_guard lock(g_openMutex);
+  g_allowedHeadsets.insert(Upper(serial));
+}
 
 // Wraps the stock headset so the host's Activate tells us its object id.
 class StockHmd::DeviceProxy : public ITrackedDeviceServerDriver {
@@ -244,10 +505,31 @@ class StockHmd::Context : public IVRDriverContext {
   StockHmd::LogFilter* log_;
 };
 
+namespace {
+// hidapi's strings are wide; USB names and serials are ASCII ('?' otherwise). Same on
+// every backend, unlike printf's %ls.
+std::string Narrow(const wchar_t* text) {
+  std::string out;
+  for (; text && *text; ++text) out += *text < 0x80 ? char(*text) : '?';
+  return out;
+}
+}  // namespace
+
 std::string StockHmd::DefaultPath() {
   if (const char* p = std::getenv("LH_STOCK_DRIVER"); p && *p) return p;
 #ifdef _WIN32
-  return {};  // TODO(windows): driver_lighthouse.dll.stock next to ours
+  HMODULE self = nullptr;
+  if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                          reinterpret_cast<LPCWSTR>(&StockHmd::DefaultPath), &self))
+    return {};
+  wchar_t name[32768];
+  const DWORD n = GetModuleFileNameW(self, name, DWORD(std::size(name)));
+  if (n == 0 || n >= std::size(name)) return {};
+  const auto path = std::filesystem::path(std::wstring(name, n)).parent_path() / L"driver_lighthouse.dll.stock";
+  std::error_code ec;
+  if (!std::filesystem::exists(path, ec)) return {};
+  const auto u8 = path.u8string();
+  return std::string(u8.begin(), u8.end());
 #else
   Dl_info info{};
   if (!dladdr(reinterpret_cast<void*>(&StockHmd::DefaultPath), &info) || !info.dli_fname) return {};
@@ -261,6 +543,7 @@ StockHmd::Presence StockHmd::HeadsetPresent(std::string* which, std::vector<std:
   // LH_STOCK_HMD=1: load the stock driver even if no USB device looks like a headset.
   if (const char* force = std::getenv("LH_STOCK_HMD"); force && *force == '1') {
     if (which) *which = "(forced by LH_STOCK_HMD)";
+    AllowHeadset("*");  // headset unknown: any wired 0x2300 may be it
     return Presence::Yes;
   }
   hid_device_info* list = hid_enumerate(0x28de, 0);
@@ -272,13 +555,12 @@ StockHmd::Presence StockHmd::HeadsetPresent(std::string* which, std::vector<std:
     else if (d->product_id == 0x2300 && (product.find(L"Controller") == std::wstring::npos || std::getenv("LH_STOCK_PROBE_ALL")))
       p = Presence::Maybe;  // LH_STOCK_PROBE_ALL: controllers too (tests the config check)
     if (p == Presence::No) continue;
-    char buf[160];
-    std::snprintf(buf, sizeof buf, "28de:%04x %ls", d->product_id, product.c_str());
-    if (p > result && which) *which = buf;
+    char id[16];
+    std::snprintf(id, sizeof id, "28de:%04x ", d->product_id);
+    if (p > result && which) *which = id + Narrow(product.c_str());
     result = std::max(result, p);
     if (p == Presence::Maybe && maybe && d->serial_number) {
-      char serial[64];
-      std::snprintf(serial, sizeof serial, "%ls", d->serial_number);
+      const std::string serial = Narrow(d->serial_number);
       if (std::find(maybe->begin(), maybe->end(), serial) == maybe->end()) maybe->push_back(serial);
     }
   }
@@ -288,26 +570,53 @@ StockHmd::Presence StockHmd::HeadsetPresent(std::string* which, std::vector<std:
 
 bool StockHmd::Load(const std::string& path, IVRDriverContext* realContext, LogFn log) {
   log_ = std::move(log);
-#ifdef _WIN32
-  (void)path; (void)realContext;
-  if (log_) log_("stock driver: not supported on Windows yet");
-  return false;
-#else
   if (path.empty()) return false;
+  using Factory = void* (*)(const char*, int*);
+#ifdef _WIN32
+  // path is UTF-8. LOAD_WITH_ALTERED_SEARCH_PATH: its own dependencies come from its
+  // directory (bin/win64), as when SteamVR loads it. The ".stock" extension is fine with
+  // a full path (LoadLibrary only appends ".dll" to names without one).
+  const std::filesystem::path file(std::u8string(path.begin(), path.end()));
+  HMODULE module = LoadLibraryExW(file.wstring().c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+  if (!module) {
+    if (log_) log_("stock driver: cannot load " + path + ": error " + std::to_string(GetLastError()));
+    return false;
+  }
+  library_ = module;
+  auto factory = reinterpret_cast<Factory>(reinterpret_cast<void*>(GetProcAddress(module, "HmdDriverFactory")));
+  if (!std::getenv("LH_STOCK_ALL_DEVICES")) {
+    {
+      std::lock_guard lock(g_openMutex);
+      g_openLog = log_;
+    }
+    if (!HideOtherDevices(module) && log_) log_("stock driver: could not limit it to the headset's devices");
+  }
+#else
   // RTLD_LOCAL: its symbols (HmdDriverFactory, its OpenVR helpers) stay its own.
   library_ = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
   if (!library_) {
     if (log_) log_(std::string("stock driver: cannot load ") + path + ": " + dlerror());
     return false;
   }
-  using Factory = void* (*)(const char*, int*);
   auto factory = reinterpret_cast<Factory>(dlsym(library_, "HmdDriverFactory"));
+  if (!std::getenv("LH_STOCK_ALL_DEVICES")) {
+    {
+      std::lock_guard lock(g_openMutex);
+      g_openLog = log_;
+    }
+    if (!HideOtherDevices(library_) && log_) log_("stock driver: could not limit it to the headset's devices");
+  }
+#endif
   int code = 0;
   auto* provider = factory ? static_cast<IServerTrackedDeviceProvider*>(factory(IServerTrackedDeviceProvider_Version, &code))
                            : nullptr;
   if (!provider) {
     if (log_) log_("stock driver: no " + std::string(IServerTrackedDeviceProvider_Version) + " in " + path);
+#ifdef _WIN32
+    FreeLibrary(static_cast<HMODULE>(library_));
+#else
     dlclose(library_);
+#endif
     library_ = nullptr;
     return false;
   }
@@ -315,13 +624,16 @@ bool StockHmd::Load(const std::string& path, IVRDriverContext* realContext, LogF
   realHost_ = static_cast<IVRServerDriverHost*>(real_->GetGenericInterface(IVRServerDriverHost_Version, nullptr));
   host_ = new Host(this);
   if (auto* realSettings = static_cast<IVRSettings*>(real_->GetGenericInterface(IVRSettings_Version, nullptr))) {
-    // <driver>/bin/linux64/<library> -> <driver>/resources/settings/default.vrsettings
-    const auto file = std::filesystem::path(path).parent_path().parent_path().parent_path() / "resources" /
-                      "settings" / "default.vrsettings";
+    // <driver>/bin/{linux64,win64}/<library> -> <driver>/resources/settings/default.vrsettings
+    const auto file = std::filesystem::path(std::u8string(path.begin(), path.end())).parent_path().parent_path().parent_path() /
+                      "resources" / "settings" / "default.vrsettings";
     nlohmann::json defaults;
     if (std::ifstream in(file); in) defaults = nlohmann::json::parse(in, nullptr, false, true);
     if (defaults.is_discarded() || !defaults.is_object()) {
-      if (log_) log_("stock driver: no settings defaults at " + file.string());
+      if (log_) {
+        const auto u8 = file.u8string();
+        log_("stock driver: no settings defaults at " + std::string(u8.begin(), u8.end()));
+      }
       defaults = nlohmann::json::object();
     }
     settings_ = new Settings(realSettings, std::move(defaults));
@@ -337,7 +649,6 @@ bool StockHmd::Load(const std::string& path, IVRDriverContext* realContext, LogF
   provider_ = provider;
   if (log_) log_("stock driver loaded for head-mounted displays: " + path);
   return true;
-#endif
 }
 
 void StockHmd::Cleanup() {

@@ -20,7 +20,7 @@ files = {build / 'openvr/lighthouse/bin/win64/driver_lighthouse.dll': out / 'dri
 files.update({build / name: out / 'apps' / name for name in ['liblh.dll', 'lhviz.exe', 'lhtool.exe', 'lhcapture.exe']})
 system = {'advapi32.dll', 'kernel32.dll', 'shlwapi.dll', 'user32.dll', 'gdi32.dll',
           'shell32.dll', 'winmm.dll', 'ole32.dll', 'comdlg32.dll', 'msvcrt.dll',
-          'ucrtbase.dll', 'ntdll.dll', 'imm32.dll', 'version.dll', 'oleaut32.dll', 'setupapi.dll', 'opengl32.dll'}
+          'ucrtbase.dll', 'ntdll.dll', 'imm32.dll', 'version.dll', 'oleaut32.dll', 'setupapi.dll', 'opengl32.dll', 'hid.dll'}
 artifacts = []
 for source, target in files.items():
     if not source.is_file():
@@ -55,14 +55,31 @@ shutil.copy2(repo / 'scripts/windows-driver.ps1', out / 'Install-Driver.ps1')
     'vcpkg_baseline': json.loads((repo / 'vcpkg.json').read_text())['builtin-baseline'],
     'artifacts': artifacts,
 }, indent=2) + '\n')
-(out / 'README.txt').write_text('''lh Windows x64 — tracked devices only (no HMD display driver)
+(out / 'README.txt').write_text('''lh Windows x64 — lighthouse tracking; headsets displayed through SteamVR's own driver
+
+Headsets (Vive, Vive Pro, Index, Bigscreen Beyond): our driver tracks them; their
+display comes from SteamVR's original driver, which the installer keeps as
+driver_lighthouse.dll.stock next to ours and which ours loads at start-up.
+Nothing of Valve's is in this package. Switches (environment variables, NAME=1):
+  LH_STOCK_HMD=1      always load the stock display part (headset not detected)
+  LH_NO_STOCK_HMD=1   never load it (tracked devices only, no headset)
+  LH_NO_REBASE=1      old behaviour when the headset's main base goes out of view
+  LH_STOCK_DRIVER=... path of the stock DLL, if not next to ours
+  LH_STOCK_ALL_DEVICES=1  let the stock part see every lighthouse device (by default it
+                      only sees the headset: otherwise wireless trackers stutter)
+  LH_DARK_BY_LIGHT_TIME=1 / LH_ROOM_STEPS=1  older tracking behaviour, for comparison
+Environment variables reach SteamVR only after Steam restarts. Recording a session for
+a bug report: add "capture" : "C:\\lh-capture\\run1" under "driver_lighthouse" in
+Steam\config\steamvr.vrsettings (or set LH_CAPTURE), play until it goes wrong, close
+SteamVR, and send that folder plus Steam\\logs\\vrserver.txt (our lines start with "lh:").
 
 Close SteamVR before installing. Extract the ZIP completely, then in PowerShell:
   powershell -ExecutionPolicy Bypass -File .\\Install-Driver.ps1 Install
 For another Steam library add: -SteamVRPath "D:\\SteamLibrary\\steamapps\\common\\SteamVR"
 Restore the original driver:
   powershell -ExecutionPolicy Bypass -File .\\Install-Driver.ps1 Restore
-The installer retains driver_lighthouse.dll.stock. It is not run automatically.
+The installer retains driver_lighthouse.dll.stock (needed for headsets; after a
+SteamVR update, install again: the new stock DLL becomes the backup).
 Alternatively back up the stock DLL yourself and replace:
   SteamVR\\drivers\\lighthouse\\bin\\win64\\driver_lighthouse.dll
 Keep the existing SteamVR manifest, input profiles, models and hand assets.
@@ -82,7 +99,8 @@ LH_REFERENCE_DB, LH_ROOM_MAP, LH_STEAM_DB. No host room/chaperone files are modi
 
 Validation: Windows binaries tested via Wine (unit/replay/mock host/viewer),
 NOT inside native Windows SteamVR or against Windows USB hardware. The installer
-has not been executed on Windows. Tracking, haptics and Identify (tone + LED)
+has not been executed on Windows. The headset (stock display) path is untested
+on Windows: it works on Linux SteamVR and Monado. Tracking, haptics and Identify (tone + LED)
 are verified with the same code on Linux hardware only.
 Do not infer native Windows tracking or stock-driver parity from Wine tests.
 ''')

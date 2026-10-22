@@ -59,6 +59,12 @@ class StockHmd {
   //    decides (the session's role from device_class); `maybe` gets their serials.
   enum class Presence { No, Maybe, Yes };
   static Presence HeadsetPresent(std::string* which = nullptr, std::vector<std::string>* maybe = nullptr);
+  // A wired 28de:2300 headset (Bigscreen Beyond) the stock driver may open; call before
+  // Load. On Linux the stock driver never sees any other lighthouse device: dongles and
+  // other wired 0x2300 devices are left out of its udev scans (it would otherwise drive
+  // them too: in LH2 rooms every tracker then paused its IMU stream ~30 ms once a
+  // second). LH_STOCK_ALL_DEVICES=1 turns this off.
+  static void AllowHeadset(const std::string& serial);
 
  private:
   class Host;
