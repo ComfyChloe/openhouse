@@ -1,0 +1,220 @@
+// lh::Session — the public face of the lh driver runtime (liblh).
+//
+// A Session owns one tracking universe: it reads devices (live USB or a recorded
+// .lhraw capture), runs one tracker per device on top of a room map that every
+// device shares, decodes controller input, and keeps the room map on disk.
+//
+// Frontends (the 3D visualizer, lhtool, and later the SteamVR driver) only talk to
+// this header. Everything here is plain data; no Eigen/transport types leak out.
+//
+// Thread safety: lifecycle calls (Start/Stop/destruction) are owner-thread
+// operations. While running, data/control methods may be called concurrently.
+// Snapshot() returns a consistent copy; PollEvents() drains the event queue.
+#pragma once
+
+#include <array>
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
+
+namespace lh {
+
+struct Pose {
+  std::array<double, 3> position{};                 // meters
+  std::array<double, 4> orientation{1, 0, 0, 0};    // w, x, y, z
+};
+
+// Role a device is exposed as. Taken from the device JSON `device_class`; physical
+// hardware never overrides it (an Index controller configured as generic_tracker is
+// a Tracker).
+enum class DeviceRole { Hmd, Controller, Tracker, BaseStation };
+
+enum class TrackingState {
+  Disconnected,   // no data from the device
+  Uninitialized,  // connected, never had a pose
+  Acquiring,      // has a pose in its base frame; world frame not known yet
+  Tracking,       // optical updates within the last 0.25 s
+  Coasting,       // IMU-only for a short time (pose still valid)
+  Lost,           // tracking reset; waiting for light
+};
+
+const char* ToString(DeviceRole);
+const char* ToString(TrackingState);
+
+// SteamVR ETrackingResult equivalents, for the future driver wrapper.
+enum class TrackingResult : int {
+  Uninitialized = 1,
+  CalibratingInProgress = 100,
+  CalibratingOutOfRange = 101,
+  RunningOk = 200,
+  RunningOutOfRange = 201,
+};
+
+struct DevicePose {
+  double hostTime = 0;          // seconds, host monotonic clock of the pose sample
+  bool valid = false;           // usable world pose
+  TrackingState state = TrackingState::Uninitialized;
+  TrackingResult result = TrackingResult::Uninitialized;
+  Pose worldFromImu;            // filter origin (IMU)
+  Pose worldFromHead;           // config "head" frame (HMD eyes center / controller grip-ish)
+  Pose imuFromHead;             // constant per device (DriverPose qDriverFromHead*)
+  std::array<double, 3> velocity{};         // world, m/s
+  std::array<double, 3> angularVelocity{};  // world, rad/s
+  uint32_t primaryBase = 0;     // base whose frame the filter runs in
+  std::vector<uint32_t> bases;  // all bases in the filter
+  uint64_t updates = 0;         // optical updates since last (re)acquire
+  // Diagnostics: the filter's own pose (last optical/inertial update, before the
+  // output stage's prediction and smoothing) and its host time.
+  std::array<double, 3> filterPosition{};
+  double filterTime = 0;
+};
+
+// Index ("Knuckles") controller input. Other devices report no input.
+struct ControllerInput {
+  double hostTime = 0;
+  // Buttons (pressed).
+  bool systemClick = false, aClick = false, bClick = false, triggerClick = false;
+  bool thumbstickClick = false, trackpadTouch = false;
+  // Capacitive touch.
+  bool systemTouch = false, aTouch = false, bTouch = false, triggerTouch = false, thumbstickTouch = false;
+  double trigger = 0;                 // 0..1
+  double thumbstickX = 0, thumbstickY = 0;  // -1..1
+  double trackpadX = 0, trackpadY = 0;      // -1..1 (valid while trackpadTouch)
+  double trackpadForce = 0;           // 0..1
+  double gripForce = 0;               // 0..1
+  // Finger proximity / curl, 0 = open .. 1 = touching.
+  double fingerIndex = 0, fingerMiddle = 0, fingerRing = 0, fingerPinky = 0;
+};
+
+struct DeviceInfo {
+  std::string serial;           // "LHR-13DA81D1", or "LHB-A101B835" for bases
+  DeviceRole role = DeviceRole::Tracker;
+  std::string deviceClass;      // raw config device_class
+  std::string model, manufacturer, renderModel, controllerRole;  // "left_hand"/"right_hand"
+  bool connected = false;
+  bool enabled = true;          // disabled devices are listed but ignored entirely
+  std::optional<int> batteryPercent;
+  bool charging = false;
+  std::string configJson;       // full device JSON (empty for bases)
+  // Sensor geometry in the IMU frame (for visualization).
+  std::vector<std::array<double, 3>> sensors;
+};
+
+struct BaseStationState {
+  std::string serial;           // "LHB-XXXXXXXX"
+  uint32_t id = 0;
+  bool seen = false;            // OOTX received this session
+  bool known = false;           // pose known in the room map
+  Pose worldFromBase;
+  double positionVariance = 0, rotationVariance = 0;
+  int mode = 0;                 // 1 A, 2 B, 3 C
+  std::string channel;          // as its display shows it: "A" "b" "c", lhbs multi "1".."4"; "" unknown
+  int faults = 0;
+  bool origin = false;
+};
+
+struct DeviceState {
+  DeviceInfo info;
+  DevicePose pose;
+  std::optional<ControllerInput> input;
+};
+
+// Per-device data that changes every sample (no config/geometry copies): what a
+// high-rate consumer such as the SteamVR driver polls.
+struct DeviceUpdate {
+  std::string serial;
+  DeviceRole role = DeviceRole::Tracker;
+  bool connected = false, enabled = true;
+  std::optional<int> batteryPercent;
+  bool charging = false;
+  DevicePose pose;
+  std::optional<ControllerInput> input;
+};
+
+struct SessionSnapshot {
+  double hostTime = 0;
+  std::vector<DeviceState> devices;
+  std::vector<BaseStationState> bases;
+  uint64_t roomRevision = 0;
+  std::string roomId;
+  uint64_t originEpoch = 0;  // bumps when a knocked origin base was re-placed in the room
+};
+
+enum class SessionEventType {
+  DeviceConnected, DeviceDisconnected, DeviceActivated, DeviceEnabledChanged,
+  TrackingStateChanged, BaseStationSeen, BaseStationLocated, RoomChanged, Log,
+};
+
+struct SessionEvent {
+  double hostTime = 0;
+  SessionEventType type = SessionEventType::Log;
+  std::string serial;           // device or base
+  std::string text;
+};
+
+struct SessionOptions {
+  // Input: a .lhraw capture (replay) or, when empty, live USB devices.
+  std::string replayPath;
+  bool replayRealtime = true;   // pace replay by recorded host time
+  // Replay window, in seconds from the capture's first report (end <= 0: to the end).
+  // Reports before the window are skipped, so devices start fresh at its start.
+  double replayFrom = 0, replayTo = 0;
+  // Replay only these devices (serials); empty: all. Others' reports are dropped
+  // before decoding, so a focused replay costs only what that device costs.
+  std::vector<std::string> replayOnly;
+  // Replay: every device's pose written here (JSON Lines) at this rate of *capture*
+  // time, from the replay thread, however fast the replay runs.
+  std::string replayTracePath;
+  double replayTraceRate = 100;
+  // Room map persistence. Empty = $XDG_CONFIG_HOME/lh/roommap.json.
+  std::string roomMapPath;
+  bool saveRoomMap = true;
+  // SteamVR lighthousedb.json to import rooms from when our map has none for the
+  // visible bases. Empty = auto-detect; "-" = disabled.
+  std::string steamDatabasePath;
+  // SteamVR cached device configs (lhr-*/config.json) for live USB. Empty = auto.
+  std::string steamConfigDir;
+  // Devices to ignore (serials, e.g. "LHR-0704E07A"). Merged with the persisted
+  // settings ($XDG_CONFIG_HOME/lh/settings.json) for live sessions.
+  std::vector<std::string> disabledDevices;
+  // Settings file; empty = default for live sessions, none for replays.
+  std::string settingsPath;
+  // Live USB: also record every raw report to this .lhraw (replayable).
+  std::string capturePath;
+};
+
+class Session {
+ public:
+  static std::unique_ptr<Session> Create(const SessionOptions& options = {});
+  virtual ~Session() = default;
+
+  virtual bool Start(std::string* error = nullptr) = 0;
+  virtual void Stop() = 0;
+  virtual bool Running() const = 0;
+  // Replay only: true once the whole capture has been processed.
+  virtual bool Finished() const = 0;
+
+  virtual SessionSnapshot Snapshot() const = 0;
+  virtual std::vector<DeviceUpdate> Updates() const = 0;
+  // Monotonic host time the poses refer to (steady clock seconds for live sessions).
+  virtual double HostNow() const = 0;
+  virtual std::vector<SessionEvent> PollEvents() = 0;
+
+  // Enable/disable a device by serial. Disabled devices produce no poses, input or
+  // room-map contributions. Persisted in the settings file when there is one.
+  virtual void SetDeviceEnabled(const std::string& serial, bool enabled) = 0;
+  // Index only. Returns true when queued, not a hardware acknowledgement.
+  // Replay/disabled devices return false. Frequency 0 selects a default.
+  virtual bool Haptic(const std::string& serial, double frequency, double amplitude, double duration) = 0;
+  // Queue the wireless device's hardware power-off command. Does not disable it
+  // in settings; powering it on again can resume the existing session.
+  virtual bool PowerOff(const std::string& serial) = 0;
+
+  // Forget the room map (all base poses) and relearn it.
+  virtual void ResetRoom() = 0;
+  virtual bool SaveRoom(std::string* error = nullptr) = 0;
+};
+
+}  // namespace lh

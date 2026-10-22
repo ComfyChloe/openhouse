@@ -1,0 +1,28 @@
+# Build output (CMake, MSVC, MinGW, packaging)
+build/
+build-*/
+dist/
+*.log
+compile_commands.json
+__pycache__/
+*.pyc
+
+# Editors / local tools
+.cache/
+.vscode/
+.idea/
+.claude/
+.mcp.json
+
+# Recordings: large, and contain device serials and room calibration. Tests that need
+# them skip when absent.
+captures/
+*.lhraw
+
+# Third-party and proprietary material that must not be published
+driver_lighthouse.so
+proto/
+*.so.stock
+libsurvive/
+re/*
+!re/ghidra_scripts/
