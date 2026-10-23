@@ -36,6 +36,7 @@
 #include <thread>
 #include <vector>
 
+#include "pairing_mailbox.hpp"
 #include "stock_hmd.hpp"
 
 namespace {
@@ -194,6 +195,16 @@ class Device : public ITrackedDeviceServerDriver {
   }
 
   bool Active() const { return active_ && (!externalAlive_ || *externalAlive_); }
+  bool IsHmd() const { return info_.role == lh::DeviceRole::Hmd; }
+  // "left_hand" / "right_hand" for a controller, else "".
+  std::string Hand() const { return info_.role == lh::DeviceRole::Controller ? info_.controllerRole : std::string(); }
+  std::string StringProperty(ETrackedDeviceProperty prop) const {
+    if (!Active()) return {};
+    char value[256] = {};
+    ETrackedPropertyError error = TrackedProp_Success;
+    VRProperties()->GetStringProperty(container_, prop, value, sizeof value, &error);
+    return error == TrackedProp_Success ? std::string(value) : std::string();
+  }
   const DeviceStatic& Info() const { return info_; }
   bool MatchesHaptic(const VREvent_t& event) const {
     return active_ && lh::openvr::MatchesHaptic(event, id_, container_, haptic_);
@@ -366,6 +377,10 @@ class Device : public ITrackedDeviceServerDriver {
                                      : info_.controllerRole == "right_hand" ? TrackedControllerRole_RightHand
                                                                             : TrackedControllerRole_Invalid);
         props->SetInt32Property(c, Prop_DeviceClass_Int32, TrackedDeviceClass_Controller);
+        // Two controllers for one hand: SteamVR's primary is the higher priority. The one
+        // turned on last, then whichever is picked up and used (UpdateInputs).
+        props->SetInt32Property(c, Prop_ControllerHandSelectionPriority_Int32, NextHandPriority());
+        lastUse_ = std::chrono::steady_clock::now();
         props->SetInt32Property(c, Prop_Axis0Type_Int32, k_eControllerAxis_Joystick);
         props->SetInt32Property(c, Prop_Axis1Type_Int32, k_eControllerAxis_Trigger);
         props->SetInt32Property(c, Prop_Axis2Type_Int32, k_eControllerAxis_TrackPad);
@@ -530,6 +545,15 @@ class Device : public ITrackedDeviceServerDriver {
   void UpdateInputs(const lh::ControllerInput& s, double now) {
     if (s.hostTime == lastInputTime_) return;
     lastInputTime_ = s.hostTime;
+    if (active_ && info_.role == lh::DeviceRole::Controller &&
+        (s.systemClick || s.aClick || s.bClick || s.triggerClick || s.thumbstickClick || s.trigger > 0.5)) {
+      // Used after a minute of rest: this one is in the hand now (the other on a hip,
+      // a shelf): it becomes the primary for its hand.
+      const auto t = std::chrono::steady_clock::now();
+      if (t - lastUse_ > std::chrono::seconds(60))
+        VRProperties()->SetInt32Property(container_, Prop_ControllerHandSelectionPriority_Int32, NextHandPriority());
+      lastUse_ = t;
+    }
     // Clamped: the first report after activation can carry a host time from long before.
     const double offset = std::clamp(s.hostTime - now, -0.1, 0.0);
     // Squeeze: the Index reports finger proximity (middle/ring/pinky) and grip force.
@@ -568,6 +592,11 @@ class Device : public ITrackedDeviceServerDriver {
   std::atomic<bool> active_{false};
   const std::atomic<bool>* externalAlive_ = nullptr;  // AttachExternal: the host still has it
   std::atomic<bool> powerOffRequested_{false};
+  std::chrono::steady_clock::time_point lastUse_{};
+  static int32_t NextHandPriority() {
+    static std::atomic<int32_t> next{1000};
+    return ++next;
+  }
   std::atomic<uint32_t> id_{k_unTrackedDeviceIndexInvalid};
   PropertyContainerHandle_t container_ = k_ulInvalidPropertyContainer;
   std::mutex poseMutex_;
@@ -666,6 +695,9 @@ class Provider : public IServerTrackedDeviceProvider {
         "); head-mounted displays: tracked by us, displayed through the stock driver when one is present");
     Log(std::string("input components through ") +
         (ComponentInput() != VRDriverInput() ? "IVRDriverInput_005" : IVRDriverInput_Version));
+    // SteamVR's dongle pairing menu: ours owns the dongles (registered before the stock
+    // driver loads, which is kept off this mailbox).
+    if (options.replayPath.empty()) pairing_.Open(context_, [](const std::string& text) { Log(text); });
     // A headset on USB: bring up the stock driver for its display now, inside the host's
     // device discovery window.
     using Presence = lh::openvr::StockHmd::Presence;
@@ -709,6 +741,23 @@ class Provider : public IServerTrackedDeviceProvider {
   }
 
   void Cleanup() override {
+    // SteamVR's "Turn off controllers when exiting SteamVR" (power/powerOffOnExit,
+    // default on): the stock driver powers its wireless devices off at shutdown; so do
+    // we, while the USB thread still runs to send it.
+    if (session_) {
+      EVRSettingsError error = VRSettingsError_None;
+      const bool powerOff = VRSettings() ? VRSettings()->GetBool("power", "powerOffOnExit", &error) : false;
+      if ((error == VRSettingsError_None ? powerOff : true) && !std::getenv("LH_NO_POWER_OFF_ON_EXIT")) {
+        int queued = 0;
+        for (const auto& d : session_->Snapshot().devices)
+          if (d.info.connected && (d.info.role == lh::DeviceRole::Controller || d.info.role == lh::DeviceRole::Tracker))
+            queued += session_->PowerOff(d.info.serial);
+        if (queued) {
+          Log("SteamVR exiting: powering off " + std::to_string(queued) + " device(s)");
+          std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        }
+      }
+    }
     stop_ = true;
     if (thread_.joinable()) thread_.join();
     if (session_) session_->Stop();
@@ -747,6 +796,14 @@ class Provider : public IServerTrackedDeviceProvider {
       else stock_.Load(path, context_, [](const std::string& text) { Log(text); });
     }
     stock_.RunFrame();
+    if (session_) pairing_.Poll(*session_, ExpectedControllerType());
+  }
+
+  // The headset's expected controllers (Prop_ExpectedControllerType_String), "" if none.
+  std::string ExpectedControllerType() const {
+    for (const auto& [serial, device] : devices_)
+      if (device && device->IsHmd() && device->Active()) return device->StringProperty(Prop_ExpectedControllerType_String);
+    return {};
   }
 
   bool ShouldBlockStandbyMode() override { return false; }
@@ -862,7 +919,31 @@ class Provider : public IServerTrackedDeviceProvider {
   }
 
   void RegisterNewDevices() {
-    for (const auto& d : snapshot_.devices) {
+    // SteamVR fills an empty hand slot with whichever controller comes next, also a
+    // second one for the other hand (live: a right controller on a hip took the left
+    // slot because the left one registered after it). So per batch: one controller per
+    // free hand first (left, then right), then extra same-hand controllers, then trackers.
+    std::set<std::string> handsTaken;
+    for (const auto& [serial, device] : devices_)
+      if (device && device->Hand().size()) handsTaken.insert(device->Hand());
+    std::vector<const lh::DeviceState*> order;
+    for (const auto& d : snapshot_.devices) order.push_back(&d);
+    auto rank = [&](const lh::DeviceState* d) {
+      if (d->info.role != lh::DeviceRole::Controller) return 3;
+      if (d->info.controllerRole == "left_hand") return 0;
+      if (d->info.controllerRole == "right_hand") return 1;
+      return 2;
+    };
+    std::stable_sort(order.begin(), order.end(), [&](auto* a, auto* b) { return rank(a) < rank(b); });
+    std::vector<const lh::DeviceState*> extras;
+    for (auto* d : order) {
+      const std::string& hand = d->info.controllerRole;
+      if (d->info.role == lh::DeviceRole::Controller && !hand.empty() && !handsTaken.insert(hand).second) extras.push_back(d);
+    }
+    std::stable_partition(order.begin(), order.end(), [&](auto* d) { return std::find(extras.begin(), extras.end(), d) == extras.end(); });
+    std::stable_partition(order.begin(), order.end(), [&](auto* d) { return d->info.role == lh::DeviceRole::Controller; });
+    for (const auto* dp : order) {
+      const auto& d = *dp;
       if (devices_.count(d.info.serial) || !d.info.enabled || d.info.role == lh::DeviceRole::Hmd) continue;
       DeviceStatic info{d.info.serial, d.info.model, d.info.manufacturer, RenderModel(d.info.renderModel), d.info.controllerRole,
                         d.info.role, {}};
@@ -901,6 +982,7 @@ class Provider : public IServerTrackedDeviceProvider {
   std::unique_ptr<lh::Session> session_;
   IVRDriverContext* context_ = nullptr;
   lh::openvr::StockHmd stock_;
+  lh::openvr::PairingMailbox pairing_;
   std::atomic<bool> wantStock_{false};
   bool triedStock_ = false;
   std::thread thread_;

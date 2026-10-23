@@ -205,6 +205,13 @@ class Session {
   // Enable/disable a device by serial. Disabled devices produce no poses, input or
   // room-map contributions. Persisted in the settings file when there is one.
   virtual void SetDeviceEnabled(const std::string& serial, bool enabled) = 0;
+
+  // Wireless receivers (dongles), live USB only: serial, and the device paired and
+  // connected to it now ("" if none).
+  struct Receiver { std::string serial, connected; };
+  virtual std::vector<Receiver> Receivers() const = 0;
+  // Pairing mode on a receiver for `seconds` (0 leaves it); false if not plugged in.
+  virtual bool SetPairing(const std::string& receiver, double seconds) = 0;
   // Index only. Returns true when queued, not a hardware acknowledgement.
   // Replay/disabled devices return false. Frequency 0 selects a default.
   virtual bool Haptic(const std::string& serial, double frequency, double amplitude, double duration) = 0;

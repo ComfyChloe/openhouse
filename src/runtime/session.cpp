@@ -132,6 +132,8 @@ DeviceRole RoleFromConfig(const std::string& configJson) {
   const json j = json::parse(configJson);
   const std::string cls = Lower(j.value("device_class", ""));
   if (cls == "hmd") return DeviceRole::Hmd;
+  // As the stock driver: "generic_tracker" makes a controller a tracker (e.g. on a hip).
+  if (Lower(j.value("tracked_controller_role", "")) == "generic_tracker") return DeviceRole::Tracker;
   if (cls == "controller") {
     const std::string hint = Lower(j.value("model_number", "") + " " + j.value("render_model", "") + " " +
                                    j.value("input_profile", ""));
@@ -161,6 +163,15 @@ class SessionImpl final : public Session, public InputSinkBase {
   std::vector<SessionEvent> PollEvents() override;
   void ResetRoom() override;
   void SetDeviceEnabled(const std::string& serial, bool enabled) override;
+  std::vector<Receiver> Receivers() const override {
+    std::vector<Receiver> out;
+    if (usb_)
+      for (const auto& r : usb_->Receivers()) out.push_back({r.serial, r.connected});
+    return out;
+  }
+  bool SetPairing(const std::string& receiver, double seconds) override {
+    return usb_ && usb_->SetPairing(receiver, int(std::lround(seconds * 1000)));
+  }
   bool Haptic(const std::string& serial, double frequency, double amplitude, double duration) override;
   bool PowerOff(const std::string& serial) override;
   bool SaveRoom(std::string* error) override;
@@ -228,6 +239,7 @@ class SessionImpl final : public Session, public InputSinkBase {
   bool explicitControllers_ = false;
   std::string leftController_, rightController_;
   std::set<std::string> disabled_;
+  std::map<std::string, std::string> roles_;  // settings.json "roles": serial -> tracked_controller_role
   bool persist_ = false;
   std::deque<SessionEvent> events_;
   mutable double now_ = 0;  // latest host time seen (live: steady clock)
@@ -482,7 +494,16 @@ void SessionImpl::OnDeviceAttached(const DeviceId& id, const std::string& config
     d.info.manufacturer = j.value("manufacturer", "");
     d.info.renderModel = j.value("render_model", "");
     d.info.controllerRole = j.value("tracked_controller_role", "");
-    if (explicitControllers_ && d.info.role != DeviceRole::Hmd) {
+    if (const auto r = roles_.find(id); r != roles_.end() && d.info.role != DeviceRole::Hmd) {
+      // settings.json "roles": the values of tracked_controller_role.
+      if (r->second == "generic_tracker") {
+        d.info.role = DeviceRole::Tracker;
+        d.info.controllerRole.clear();
+      } else {
+        d.info.role = DeviceRole::Controller;
+        d.info.controllerRole = r->second;
+      }
+    } else if (explicitControllers_ && d.info.role != DeviceRole::Hmd) {
       d.info.controllerRole.clear();
       d.info.role = DeviceRole::Tracker;
       if (id == leftController_ || id == rightController_) {
@@ -1032,6 +1053,16 @@ void SessionImpl::LoadSettings() {
       explicitControllers_ = true;
     }
     for (const auto& serial : j.value("disabledDevices", std::vector<std::string>{})) disabled_.insert(serial);
+    if (j.contains("roles")) {
+      // {"LHR-...": "left_hand" | "right_hand" | "generic_tracker"}, per device; the rest
+      // follow their config's tracked_controller_role.
+      for (const auto& [serial, role] : j.at("roles").items()) {
+        const std::string r = Lower(role.get<std::string>());
+        if (r != "left_hand" && r != "right_hand" && r != "generic_tracker")
+          throw std::runtime_error("roles: " + serial + ": expected left_hand, right_hand or generic_tracker");
+        roles_[serial] = r;
+      }
+    }
   } catch (const std::exception& e) {
     Emit(SessionEventType::Log, "", "settings " + settingsPath_ + ": " + e.what());
   }

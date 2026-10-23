@@ -96,6 +96,16 @@ class UsbTransport {
   // Ask a device (wireless or wired) for LH1 (0) or LH2 (1) light reports.
   void SetOpticalSubProtocol(const DeviceId& serial, int sub);
 
+  // Wireless receivers (dongles) plugged in now, and the device connected to each
+  // ("" if none). Any thread.
+  struct Receiver { std::string serial, connected; uint16_t pid = 0; };
+  std::vector<Receiver> Receivers() const;
+  // Puts a receiver into pairing mode for `milliseconds` (0: leaves pairing mode), as
+  // stock 0x3ce9e0 / 0x3cea40: feature 0xff "ad 03 <on> <ms u16>". A receiver that has a
+  // device is reopened afterwards (its device is replaced). Any thread; false if no such
+  // receiver is plugged in.
+  bool SetPairing(const std::string& receiver, int milliseconds);
+
   // Loads a cached SteamVR config for a serial ("LHR-0704E07A"), or "".
   static std::string LoadSteamConfig(const std::string& dir, const std::string& serial);
 
@@ -156,6 +166,17 @@ class UsbTransport {
   };
   std::mutex hapticMutex_;
   std::vector<HapticCommand> haptics_;
+  struct PairCommand { std::string receiver; int milliseconds; };
+  std::vector<PairCommand> pairing_;  // under hapticMutex_; read by the reader and probe threads
+  // Run a pending pairing command for `o`'s receiver; true if one was sent.
+  bool TakePairing(Open& o);
+  // Configs read from the devices this session (serial -> JSON): a reconnect reuses it.
+  std::mutex configMutex_;
+  std::map<std::string, std::string> sessionConfigs_;
+  mutable std::mutex receiversMutex_;
+  std::map<std::string, Receiver> receivers_;
+  void SetReceiver(const Open& o, const std::string& connected);
+  void DropReceiver(const std::string& serial);
 };
 
 }  // namespace lh::usb

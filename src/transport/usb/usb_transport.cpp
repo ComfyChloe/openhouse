@@ -1,3 +1,4 @@
+#include <array>
 #include "usb_transport.hpp"
 #include "device_config.hpp"
 #include "haptics.hpp"
@@ -221,6 +222,7 @@ UsbTransport::OpenResult UsbTransport::OpenEndpoint(const hid_device_info* d, Op
     // only time out (~1.5 s each). The probe thread picks the device up later,
     // like the stock driver's "Connected to receiver".
     o.receiver = o.info.serial;
+    SetReceiver(o, "");
     return OpenResult::Idle;
   }
   o.info.ep = nextEp_++;
@@ -229,6 +231,7 @@ UsbTransport::OpenResult UsbTransport::OpenEndpoint(const hid_device_info* d, Op
     snprintf(sn, sizeof sn, "LHR-%08X", di.serial);
     o.receiver = o.info.serial;
     o.info.serial = sn;  // device id = tracked device serial, not the dongle's
+    SetReceiver(o, sn);
   }
   CompleteSetup(o, haveInfo && di.supportsVersioning);
   if (getenv("LH_DEBUG_USB")) fprintf(stderr, "lh: %s set up in %.0f ms\n", o.info.serial.c_str(), (HostNow() - t0) * 1000);
@@ -238,16 +241,27 @@ UsbTransport::OpenResult UsbTransport::OpenEndpoint(const hid_device_info* d, Op
 void UsbTransport::Enumerate(bool startup) {
   hid_device_info* list = hid_enumerate(kValveVid, 0);
   std::set<std::string> present;
+  std::vector<hid_device_info*> fresh;
   for (hid_device_info* d = list; d && !stop_; d = d->next) {
     EndpointKind kind;
     if (!Classify(d->product_id, d->interface_number, kind)) continue;
     present.insert(d->path);
-    {
-      std::lock_guard lock(pathsMutex_);
-      if (paths_.count(d->path)) continue;
-    }
-    Open o;
-    const OpenResult result = OpenEndpoint(d, &o);
+    std::lock_guard lock(pathsMutex_);
+    if (!paths_.count(d->path)) fresh.push_back(d);
+  }
+  // Opened in parallel: each reads its device's config (~0.4 s, wireless ~0.5 s), and a
+  // host only accepts devices for a few seconds after Init (Monado: 3 s).
+  std::vector<Open> opened(fresh.size());
+  std::vector<OpenResult> results(fresh.size(), OpenResult::Failed);
+  {
+    std::vector<std::thread> workers;
+    for (size_t i = 0; i < fresh.size(); ++i)
+      workers.emplace_back([&, i] { results[i] = OpenEndpoint(fresh[i], &opened[i]); });
+    for (auto& w : workers) w.join();
+  }
+  for (size_t i = 0; i < fresh.size() && !stop_; ++i) {
+    Open& o = opened[i];
+    const OpenResult result = results[i];
     if (result == OpenResult::Failed) continue;
     {
       std::lock_guard lock(pathsMutex_);
@@ -272,6 +286,7 @@ void UsbTransport::Enumerate(bool startup) {
   for (size_t i = 0; i < idle_.size();) {
     if (present.count(idle_[i].path)) { ++i; continue; }
     fprintf(stderr, "lh: receiver %s unplugged\n", idle_[i].receiver.c_str());
+    DropReceiver(idle_[i].receiver);
     hid_close(idle_[i].dev);
     {
       std::lock_guard lock(pathsMutex_);
@@ -346,12 +361,30 @@ void UsbTransport::CompleteSetup(Open& o, bool supportsVersioning) {
   }
   if (o.info.kind != EndpointKind::Optical && !FetchRangeModes(o.dev, o.info.gyroRange, o.info.accelRange))
     fprintf(stderr, "lh: %s: unable to fetch gyro/accelerometer range modes\n", o.info.serial.c_str());
-  if (o.info.kind != EndpointKind::Optical) o.info.configJson = LoadSteamConfig(opts_.steamLighthouseConfigDir, o.info.serial);
-  if (o.info.kind != EndpointKind::Optical && o.info.configJson.empty() && opts_.fetchConfigIfMissing) {
-    std::string error;
-    if (!ReadDeviceConfig([&](uint8_t* data, size_t size) { return hid_get_feature_report(o.dev, data, size); },
-                          &o.info.configJson, &error))
-      fprintf(stderr, "lh: %s: device config unavailable: %s\n", o.info.serial.c_str(), error.c_str());
+  // The device's own config, read once per session (as the stock driver: a config
+  // rewritten with lighthouse_console takes effect on the next start); SteamVR's cached
+  // copy only if the device can't be read. LH_PREFER_STEAM_CONFIG=1: the cache first.
+  if (o.info.kind != EndpointKind::Optical) {
+    {
+      std::lock_guard lock(configMutex_);
+      if (const auto it = sessionConfigs_.find(o.info.serial); it != sessionConfigs_.end()) o.info.configJson = it->second;
+    }
+    static const bool cacheFirst = getenv("LH_PREFER_STEAM_CONFIG") != nullptr;
+    if (o.info.configJson.empty() && cacheFirst) o.info.configJson = LoadSteamConfig(opts_.steamLighthouseConfigDir, o.info.serial);
+    if (o.info.configJson.empty() && opts_.fetchConfigIfMissing) {
+      std::string error;
+      const double t0 = HostNow();
+      if (ReadDeviceConfig([&](uint8_t* data, size_t size) { return hid_get_feature_report(o.dev, data, size); },
+                           &o.info.configJson, &error)) {
+        fprintf(stderr, "lh: %s: read device config (%zu bytes) in %.0f ms\n", o.info.serial.c_str(), o.info.configJson.size(),
+                (HostNow() - t0) * 1000);
+        std::lock_guard lock(configMutex_);
+        sessionConfigs_[o.info.serial] = o.info.configJson;
+      } else {
+        fprintf(stderr, "lh: %s: device config unavailable (%s); using SteamVR's cached copy\n", o.info.serial.c_str(), error.c_str());
+      }
+    }
+    if (o.info.configJson.empty()) o.info.configJson = LoadSteamConfig(opts_.steamLighthouseConfigDir, o.info.serial);
   }
   if (o.sensorType >= 0 && !o.info.configJson.empty()) AddSensorType(&o.info.configJson, o.sensorType);
   o.wantVersion = supportsVersioning && (o.info.pid == 0x2101 || o.info.pid == 0x2102);
@@ -369,17 +402,69 @@ void UsbTransport::RequestVersion(Open& o) {
   RequestProtocolVersion(o.dev, wirelessProtocol_);
 }
 
+void UsbTransport::SetReceiver(const Open& o, const std::string& connected) {
+  std::lock_guard lock(receiversMutex_);
+  receivers_[o.receiver] = Receiver{o.receiver, connected, o.info.pid};
+}
+
+void UsbTransport::DropReceiver(const std::string& serial) {
+  std::lock_guard lock(receiversMutex_);
+  receivers_.erase(serial);
+}
+
+std::vector<UsbTransport::Receiver> UsbTransport::Receivers() const {
+  std::lock_guard lock(receiversMutex_);
+  std::vector<Receiver> out;
+  for (const auto& [serial, r] : receivers_) out.push_back(r);
+  return out;
+}
+
+bool UsbTransport::SetPairing(const std::string& receiver, int milliseconds) {
+  {
+    std::lock_guard lock(receiversMutex_);
+    if (!receivers_.count(receiver)) return false;
+  }
+  std::lock_guard lock(hapticMutex_);
+  pairing_.push_back({receiver, std::clamp(milliseconds, 0, 0xffff)});
+  return true;
+}
+
+bool UsbTransport::TakePairing(Open& o) {
+  if (o.receiver.empty()) return false;
+  PairCommand command;
+  {
+    std::lock_guard lock(hapticMutex_);
+    const auto it = std::find_if(pairing_.begin(), pairing_.end(), [&](const PairCommand& c) { return c.receiver == o.receiver; });
+    if (it == pairing_.end()) return false;
+    command = *it;
+    pairing_.erase(it);
+  }
+  std::array<uint8_t, 64> report{};
+  report[0] = 0xff;
+  report[1] = 0xad;
+  report[2] = 0x03;
+  report[3] = command.milliseconds > 0 ? 1 : 0;
+  report[4] = uint8_t(command.milliseconds & 0xff);
+  report[5] = uint8_t(command.milliseconds >> 8);
+  const int n = hid_send_feature_report(o.dev, report.data(), report.size());
+  fprintf(stderr, "lh: receiver %s: pairing %s (%d ms): %s\n", o.receiver.c_str(), command.milliseconds ? "on" : "off",
+          command.milliseconds, n == int(report.size()) ? "sent" : "failed");
+  return n == int(report.size()) && command.milliseconds > 0;
+}
+
 void UsbTransport::ProbeMain() {
   while (!stop_) {
     Enumerate(false);
     for (size_t i = 0; i < idle_.size() && !stop_;) {
       Open& o = idle_[i];
+      TakePairing(o);
       DeviceInfo di;
       if (!QueryDeviceInfo(o.dev, &di, 2) || di.serial == 0) { ++i; continue; }
       char sn[16];
       snprintf(sn, sizeof sn, "LHR-%08X", di.serial);
       o.info.serial = sn;
       fprintf(stderr, "lh: %s: connected to receiver %s\n", sn, o.receiver.c_str());
+      SetReceiver(o, sn);
       o.info.ep = nextEp_++;
       CompleteSetup(o, di.supportsVersioning);
       {
@@ -485,6 +570,11 @@ void UsbTransport::Run() {
         fprintf(stderr, "lh: %s: %s %s (%d bytes)\n", command.serial.c_str(), command.powerOff ? "power-off" : "haptic", result.status, result.bytes);
     }
     for (auto& o : open_) {
+      // Pairing a receiver that has a device: the device is replaced, so the receiver
+      // is reopened (as one with no device) and the new one picked up when it connects.
+      if (!o.disconnected && TakePairing(o)) o.disconnected = true;
+    }
+    for (auto& o : open_) {
       if (o.disconnected) continue;
       // Re-request the wireless protocol if no transition packet arrived (0x3cca50 retry).
       if (o.versionRequestTime != 0) {
@@ -518,6 +608,7 @@ void UsbTransport::Run() {
     for (auto it = open_.begin(); it != open_.end();) {
       if (!it->disconnected) { ++it; continue; }
       fprintf(stderr, "lh: %s: unplugged (%s)\n", it->info.serial.c_str(), it->path.c_str());
+      if (!it->receiver.empty()) DropReceiver(it->receiver);
       hid_close(it->dev);
       decoder_.RemoveEndpoint(it->info.ep);
       {

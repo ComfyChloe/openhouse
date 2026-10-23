@@ -1,5 +1,7 @@
 #include "stock_hmd.hpp"
 
+#include "pairing_mailbox.hpp"
+
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -494,6 +496,13 @@ class StockHmd::Context : public IVRDriverContext {
       if (error) *error = VRInitError_None;
       return settings_;
     }
+    if (version && std::string(version) == kMailboxVersion) {
+      // Its own mailboxes pass; the pairing one is ours (pairing_mailbox.hpp).
+      if (!mailbox_)
+        if (auto* real = static_cast<IVRMailbox*>(real_->GetGenericInterface(version, error))) mailbox_ = new StockMailbox(real);
+      if (error) *error = mailbox_ ? VRInitError_None : VRInitError_Init_InterfaceNotFound;
+      return mailbox_;
+    }
     return real_->GetGenericInterface(version, error);
   }
   DriverHandle_t GetDriverHandle() override { return real_->GetDriverHandle(); }
@@ -503,6 +512,7 @@ class StockHmd::Context : public IVRDriverContext {
   Host* host_;
   Settings* settings_;
   StockHmd::LogFilter* log_;
+  StockMailbox* mailbox_ = nullptr;  // created on first request, never freed (as the rest)
 };
 
 namespace {
