@@ -120,7 +120,7 @@ class RoomMap {
   void Log(std::string text) { logs_.push_back(std::move(text)); }
   // The origin seen for the first time this session: the room re-levelled from its
   // accelerometer if the stored level disagrees, the others relearned if it was reset
-  void LevelOrigin(Room& room, RoomBase& origin, const BaseDynamicState& dynamic);
+  bool LevelOrigin(Room& room, RoomBase& origin, const BaseDynamicState& dynamic);  // true: room stale
   static void Suspect(RoomBase& base);
   void CheckAccel(uint32_t serial, const BaseDynamicState& dynamic);
   void Changed() { ++revision_; dirty_ = true; if (auto* r = ActiveRoom()) r->updated = Now(); }

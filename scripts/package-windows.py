@@ -69,8 +69,8 @@ Nothing of Valve's is in this package. Switches (environment variables, NAME=1):
                       only sees the headset: otherwise wireless trackers stutter)
   LH_DARK_BY_LIGHT_TIME=1 / LH_ROOM_STEPS=1  older tracking behaviour, for comparison
 Environment variables reach SteamVR only after Steam restarts. Recording a session for
-a bug report: add "capture" : "C:\\lh-capture\\run1" under "driver_lighthouse" in
-Steam\config\steamvr.vrsettings (or set LH_CAPTURE), play until it goes wrong, close
+a bug report: add "capture" : "C:\\\\lh-capture\\\\run1" under "driver_lighthouse" in
+Steam\\config\\steamvr.vrsettings (or set LH_CAPTURE), play until it goes wrong, close
 SteamVR, and send that folder plus Steam\\logs\\vrserver.txt (our lines start with "lh:").
 
 Close SteamVR before installing. Extract the ZIP completely, then in PowerShell:

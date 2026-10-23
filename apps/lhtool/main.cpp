@@ -91,7 +91,7 @@ int Usage() {
           "  lhtool stats live [SECONDS]\n"
           "  lhtool track IN.lhraw [--db DATABASE.json]\n"
           "  lhtool track live [SECONDS] [--db DATABASE.json]\n"
-          "  lhtool session IN.lhraw|live [--seconds N] [--rate HZ] [--room ROOM.json] [--realtime] [--disable SERIAL]... [--settings SETTINGS.json]\n"
+          "  lhtool session IN.lhraw|live [--seconds N] [--rate HZ] [--room ROOM.json] [--realtime] [--disable SERIAL]... [--settings SETTINGS.json] [--steam-db DB.json|-]\n"
           "      [--from S] [--to S] [--only SERIAL]... [--trace OUT.jsonl]  replay window (capture seconds),\n"
           "      devices, and every pose at 100 Hz of capture time\n"
           "      liblh session: shared room map, roles from device JSON, Index input; JSON Lines\n"
@@ -228,6 +228,7 @@ int SessionCommand(int argc, char** argv) {
     if (a == "--seconds" && i + 1 < argc) seconds = std::atof(argv[++i]);
     else if (a == "--rate" && i + 1 < argc) rate = std::max(1.0, std::atof(argv[++i]));
     else if (a == "--room" && i + 1 < argc) options.roomMapPath = argv[++i];
+    else if (a == "--steam-db" && i + 1 < argc) options.steamDatabasePath = argv[++i];  // "-": none
     else if (a == "--realtime") options.replayRealtime = true;
     else if (a == "--disable" && i + 1 < argc) options.disabledDevices.push_back(argv[++i]);
     else if (a == "--settings" && i + 1 < argc) options.settingsPath = argv[++i];

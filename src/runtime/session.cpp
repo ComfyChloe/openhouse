@@ -695,6 +695,9 @@ void SessionImpl::Process(const DeviceId& id, Device& d) {
   for (const auto& [config, dynamic] : decoded) {
     auto& base = bases_[config.serial];
     const bool first = !base.seen;
+    if (static const bool dbg = std::getenv("LH_DEBUG_BASE_ACCEL") != nullptr; dbg && first)
+      std::fprintf(stderr, "BASEACCEL %08X fw=%u accel %.3f %.3f %.3f\n", config.serial, unsigned(dynamic.firmwareVersion),
+                   dynamic.accelDir[0], dynamic.accelDir[1], dynamic.accelDir[2]);
     const bool newChannel = dynamic.sobChannel >= 0 && base.dynamic.sobChannel != dynamic.sobChannel;
     base.config = config;
     base.dynamic = dynamic;

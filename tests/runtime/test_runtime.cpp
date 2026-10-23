@@ -65,6 +65,16 @@ BaseConfig Config(uint32_t serial) {
   return c;
 }
 
+namespace {
+void SetEnv(const char* name, const char* value) {  // nullptr: unset
+#ifdef _WIN32
+  _putenv_s(name, value ? value : "");
+#else
+  if (value) setenv(name, value, 1); else unsetenv(name);
+#endif
+}
+}  // namespace
+
 TEST(DeviceRole, ComesFromDeviceClassOnly) {
   EXPECT_EQ(RoleFromConfig(R"({"device_class":"hmd","model_number":"Vive. MV"})"), DeviceRole::Hmd);
   EXPECT_EQ(RoleFromConfig(R"({"device_class":"controller","model_number":"Knuckles Right"})"), DeviceRole::Controller);
@@ -214,12 +224,13 @@ TEST(RoomMap, LearnsRefinesAndRelearnsBases) {
   for (int i = 0; i < 50; ++i) room.Observe("dev", 1, 2, shifted.inverse(), 1e-5, 1e-6, 1.0 + i);
   EXPECT_NEAR(room.Base(2)->worldFromBase.translation().x(), 3.02, 0.005);
   EXPECT_TRUE(room.Base(1)->worldFromBase.isApprox(Eigen::Isometry3d::Identity()));
-  // A base that keeps disagreeing by > 10 cm is relearned.
+  // A base that keeps disagreeing by > 10 cm, seen by one device only, is not
+  // overwritten (that device may be the one that is wrong): it is marked uncertain and
+  // left to the room solver.
   const Eigen::Isometry3d moved = Pose(4, 0.5, -2, 40);
-  for (int i = 0; i < 9; ++i) room.Observe("dev", 1, 2, moved.inverse(), 1e-5, 1e-6, 100.0 + i);
+  for (int i = 0; i < 10; ++i) room.Observe("dev", 1, 2, moved.inverse(), 1e-5, 1e-6, 100.0 + i);
   EXPECT_NEAR(room.Base(2)->worldFromBase.translation().x(), 3.02, 0.01);
-  room.Observe("dev", 1, 2, moved.inverse(), 1e-5, 1e-6, 200.0);
-  EXPECT_NEAR(room.Base(2)->worldFromBase.translation().x(), 4.0, 1e-9);
+  EXPECT_GE(room.Base(2)->positionVariance, 3 * 0.01 * 0.01);
   // A primary that is not in the map is located from a known alternate base.
   room.Observe("dev2", 3, 2, Pose(0, 0, 1, 0), 1e-5, 1e-6, 300.0);
   ASSERT_NE(room.Base(3), nullptr);
@@ -231,7 +242,49 @@ TEST(RoomMap, LearnsRefinesAndRelearnsBases) {
 // 0.663]) before the next session: that session re-levels the room from the base's
 // accelerometer, keeping the bases' layout, and relearns the others when its reset
 // count says it was power cycled.
+// By default a turned origin makes the stored room stale: a new room is learned (the
+// headset otherwise fought the old layout: teststill, 2026-10-23).
+TEST(RoomMap, TurnedOriginStartsANewRoom) {
+  SetEnv("LH_RELEVEL_FROM_BASE", nullptr);
+  const auto path = (std::filesystem::temp_directory_path() / ("lh-test-stale-" + std::to_string(::getpid()) + ".json")).string();
+  const Eigen::Vector3d upright(0.024, -1.0, -0.008), mounted(0.128, -0.738, 0.663);
+  BaseDynamicState saved, live;
+  saved.accelDir = {float(upright.x()), float(upright.y()), float(upright.z())};
+  live.accelDir = {float(mounted.x()), float(mounted.y()), float(mounted.z())};
+  saved.sysUnlockCount = live.sysUnlockCount = 13;
+  {
+    RoomMap room;
+    room.OnBaseSeen(Config(1), saved);
+    ASSERT_TRUE(room.EstablishOrigin(1, TiltFromUp(upright), 1e-6));
+    room.Observe("dev", 1, 2, Pose(3, 0.5, -2, 40).inverse() * room.Base(1)->worldFromBase, 1e-5, 1e-6, 0.0);
+    ASSERT_TRUE(room.Save(path));
+  }
+  RoomMap room;
+  ASSERT_TRUE(room.Load(path));
+  std::filesystem::remove(path);
+  room.OnBaseSeen(Config(1), live);
+  ASSERT_NE(room.Active(), nullptr);
+  EXPECT_TRUE(room.Empty());
+  EXPECT_EQ(room.Base(2), nullptr);
+  bool said = false;
+  for (const auto& line : room.TakeLogs()) said |= line.find("is stale") != std::string::npos;
+  EXPECT_TRUE(said);
+  // An origin that kept its tilt keeps its room.
+  RoomMap same;
+  {
+    RoomMap r;
+    r.OnBaseSeen(Config(1), saved);
+    ASSERT_TRUE(r.EstablishOrigin(1, TiltFromUp(upright), 1e-6));
+    ASSERT_TRUE(r.Save(path));
+  }
+  ASSERT_TRUE(same.Load(path));
+  std::filesystem::remove(path);
+  same.OnBaseSeen(Config(1), saved);
+  EXPECT_FALSE(same.Empty());
+}
+
 TEST(RoomMap, ReLevelsFromTheOriginAccelerometerEachSession) {
+  SetEnv("LH_RELEVEL_FROM_BASE", "1");  // opt-in since base accelerometers proved unreliable
   const auto path = (std::filesystem::temp_directory_path() / ("lh-test-relevel-" + std::to_string(::getpid()) + ".json")).string();
   const Eigen::Vector3d upright(0.024, -1.0, -0.008), mounted(0.128, -0.738, 0.663);
   BaseDynamicState saved, live;
@@ -296,6 +349,7 @@ TEST(RoomMap, ReLevelsFromTheOriginAccelerometerEachSession) {
   EXPECT_TRUE(again.TakeRelearned().empty());
   ASSERT_NE(again.Base(1), nullptr);
   EXPECT_TRUE(again.Base(1)->worldFromBase.isApprox(level, 1e-9));
+  SetEnv("LH_RELEVEL_FROM_BASE", nullptr);
 }
 
 // A hand behind the body: no light at all for 1.5 s. The device coasts on its IMU and

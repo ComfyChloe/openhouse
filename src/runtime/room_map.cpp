@@ -312,7 +312,17 @@ void RoomMap::OnBaseSeen(const BaseConfig& config, const BaseDynamicState& dynam
   }
   if (auto* room = ActiveRoom()) {
     auto found = room->bases.find(serial);
-    if (found != room->bases.end() && found->second.origin && !frozen_) LevelOrigin(*room, found->second, dynamic);
+    if (found != room->bases.end() && found->second.origin && !frozen_ && LevelOrigin(*room, found->second, dynamic)) {
+      Room fresh;
+      fresh.source = "lh";
+      fresh.id = "room-" + std::to_string(int64_t(Now()));
+      fresh.updated = Now();
+      rooms_.push_back(fresh);
+      active_ = int(rooms_.size()) - 1;
+      solvedTarget_.clear();
+      Log("Created new room " + fresh.id);
+      Changed();
+    }
   }
   // The reset count (OOTX sys_unlock_count) counts rotor locks since power-up: it
   // changes on every power cycle or wake from standby, moved or not. Nothing is
@@ -338,7 +348,7 @@ void RoomMap::OnBaseSeen(const BaseConfig& config, const BaseDynamicState& dynam
 // (the smallest turn, the room's yaw kept), with the accelerometer's variance so that
 // the filter refines it from there. A new reset count on the origin also means the
 // others' places relative to it are suspect: they are relearned.
-void RoomMap::LevelOrigin(Room& room, RoomBase& origin, const BaseDynamicState& dynamic) {
+bool RoomMap::LevelOrigin(Room& room, RoomBase& origin, const BaseDynamicState& dynamic) {
   // Below this the base's accelerometer is not better than the stored level: Valve's
   // accelerometers are off by a few degrees (live: 2.6 deg, undone by the devices'
   // own gravity a second later, a 17 cm jump of every device). Gross moves only.
@@ -352,10 +362,23 @@ void RoomMap::LevelOrigin(Room& room, RoomBase& origin, const BaseDynamicState& 
   }
   origin.resetCount = resetCount;
   const Eigen::Vector3d up(dynamic.accelDir[0], dynamic.accelDir[1], dynamic.accelDir[2]);
-  if (up.norm() < 0.5) return;  // no accelerometer reading
+  if (up.norm() < 0.5) return false;  // no accelerometer reading
   const Eigen::Vector3d upWorld = origin.worldFromBase.rotation() * up.normalized();
   const double off = std::acos(std::clamp(upWorld.y(), -1.0, 1.0));
-  if (off <= kRelevelRad) return;
+  if (off <= kRelevelRad) return false;
+  // The origin really turned (live, lhbs: A101B835 upright one day, tilted 50-60 deg
+  // on others, readings consistent within each session): the stored layout around it
+  // is stale too. Re-levelling kept that layout, and every device fought it (the
+  // headset reset every 4 s, flew between bases). Learned afresh instead (the stored
+  // room is kept, unused); LH_RELEVEL_FROM_BASE=1: re-level as before.
+  if (!std::getenv("LH_RELEVEL_FROM_BASE")) {
+    char text[200];
+    std::snprintf(text, sizeof text,
+                  "Room %s is stale: origin %08X turned %.1f deg since it was saved; learning a new room",
+                  room.id.c_str(), origin.serial, off * 57.29577951308232);
+    Log(text);
+    return true;
+  }
   const Eigen::Matrix3d delta = Eigen::Quaterniond::FromTwoVectors(upWorld, Eigen::Vector3d::UnitY()).toRotationMatrix();
   for (auto& [s, b] : room.bases) {
     b.worldFromBase.linear() = delta * b.worldFromBase.rotation();
@@ -369,10 +392,11 @@ void RoomMap::LevelOrigin(Room& room, RoomBase& origin, const BaseDynamicState& 
   char text[200];
   std::snprintf(text, sizeof text,
                 "Re-levelled room %s by %.1f deg: origin %08X's accelerometer disagrees with the stored level "
-                "(moved since the room was saved?)",
-                room.id.c_str(), off * 57.29577951308232, origin.serial);
+                "(moved since the room was saved?) (accel %.3f %.3f %.3f)",
+                room.id.c_str(), off * 57.29577951308232, origin.serial, up.x(), up.y(), up.z());
   Log(text);
   Changed();
+  return false;
 }
 
 void RoomMap::SetOotxFrame(uint32_t serial, const std::vector<uint8_t>& frame) {
