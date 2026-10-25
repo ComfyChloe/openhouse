@@ -53,6 +53,8 @@ struct SolvedBase {
   int keyframes = 0;
   int fresh = 0;   // of them, new since the last solve
   double rms = 0;  // radians
+  int devices = 0;    // distinct devices behind those keyframes
+  double span = 0;    // s: longest time one device's keyframes of this base cover
 };
 
 struct RoomSolveInput {

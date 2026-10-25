@@ -231,7 +231,7 @@ int TdmDisambiguator::RetrySensorType() {
 void TdmDisambiguator::CheckSyncLost(double t) {
   // 0x324ba0
   if (lastSyncTime_ != 0.0 && !bases_.empty() && kSyncLostAfter < t - lastSyncTime_) {
-    Log("tdm sync lost\n");
+    Log("lost the base stations' sync timing\n");
     Reset();
   }
 }
@@ -452,7 +452,7 @@ void TdmDisambiguator::UpdateBases(double t) {
     nb.counterT0 = nb.lastSync[0];
     bases_.push_back(std::move(nb));
     if (nextExpectedSync_ == 0.0) {
-      Log("tdm sync acquired\n");
+      Log("locked onto the base stations' sync timing\n");
       nextExpectedSync_ = 0.5 * idealPeriod_ + pt;
       scanTime_ = pt;
     }
@@ -609,7 +609,7 @@ unsigned TdmDisambiguator::PushOotx(Base& b, int bit) {
     if (dyn.mode == 4) {
       static int warned = 0;
       if (warned < 1) {
-        Log("Warning: TDM decoded ootx incorrectly specifies SOB mode. Forcing to MODE_UNKNOWN.\n");
+        Log("a base's OOTX data reports single-base mode in a two-base setup; ignoring its mode\n");
         warned++;
       }
       dyn.mode = 0;
@@ -745,7 +745,7 @@ unsigned TdmDisambiguator::ProcessExpectedSync(double t) {
     }
     if (1.0 < std::fabs(r)) {
       char buf[256];
-      snprintf(buf, sizeof buf, "Panic in TDM. basestation offset is invalid: %f\n", off);
+      snprintf(buf, sizeof buf, "base sync offset out of range (%f): resetting sync\n", off);
       Log(buf);
       panic = true;
     } else {
@@ -821,7 +821,7 @@ unsigned TdmDisambiguator::ProcessExpectedSync(double t) {
 bool TdmDisambiguator::SanityCheck(double t) {
   // 0x324c00
   if (bases_.size() > 2) {
-    Log("TDM supports max of 2 basestations.\n");
+    Log("cable/optical sync mode: tracking at most two base stations\n");
     PushEvent(t, 8);
     return false;
   }
@@ -832,7 +832,7 @@ bool TdmDisambiguator::SanityCheck(double t) {
     if (b.mode == 3) any3 = true;
   }
   if (any1 && any3) {
-    Log("Found two slave bases (one oblivious cable sync slave and one confused optical sync slave).\n");
+    Log("two bases both act as B (one on the sync cable, one syncing optically): check their modes\n");
     PushEvent(t, 10);
     return false;
   }
@@ -847,7 +847,7 @@ bool TdmDisambiguator::SanityCheck(double t) {
         x = double(int((d0 - latest) / T)) * T + x;
         if (x < d0 - T * 0.5) x += T;
         if (kPhaseTol < std::fabs((x - d0) / bi.period)) {
-          Log("Rotors on basestation out of 180-degree phase lock.\n");
+          Log("a base's two rotors are not half a turn apart: it may still be spinning up\n");
           return false;
         }
       }
@@ -856,7 +856,7 @@ bool TdmDisambiguator::SanityCheck(double t) {
     for (size_t j = i + 1; j < bases_.size(); j++) {
       const Base& bj = bases_[j];
       if (bi.serial != 0 && bi.serial == bj.serial) {
-        Log("Duplicate basestation serials detected.\n");
+        Log("two base stations report the same serial\n");
         return false;
       }
       double e = bj.lastSync[1];
@@ -869,7 +869,7 @@ bool TdmDisambiguator::SanityCheck(double t) {
         x = double(int(diff / T)) * T + x;
         if (x < latest - T * 0.5) x += T;
         if (kWindow30 < std::fabs((x - latest) / bi.period)) {
-          Log("Multiple basestations locked to same phase. Please confirm TDM cable is plugged in and bases are in proper A/B modes.\n");
+          Log("two bases sweep at the same time: check the sync cable and that they are set to A and B\n");
           PushEvent(t, 9);
           return false;
         }
@@ -926,7 +926,7 @@ double TdmDisambiguator::EarliestPendingTime() const {
 
 std::string TdmDisambiguator::StatsString(bool reset) {
   char buf[1024];
-  int n = snprintf(buf, sizeof buf, "TDM total=%d invalid_long=%d runt=%d sync_miss=%d samples_in_sync_guard_band=%d\n",
+  int n = snprintf(buf, sizeof buf, "sync stats: pulses %d, too long %d, too short %d, missed syncs %d, in guard band %d\n",
                    stats_.total, stats_.invalidLong, stats_.runt, stats_.syncMiss, stats_.guardBand);
   std::string s(buf, size_t(n));
   if (reset) {

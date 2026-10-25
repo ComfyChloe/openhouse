@@ -1,5 +1,5 @@
 // The driver's room, published for tools that align the lighthouse frame to something
-// else (alignment tools): POSIX shared memory /lhdrvrw-room-<uid> (Linux).
+// else (alignment tools): POSIX shared memory /openhouse-room-<uid> (Linux).
 //
 // Poses are in the host's raw tracking frame (what the base stations and devices are
 // reported in: WorldFromDriver * pose). "settled" says the room has stopped moving: no
@@ -8,13 +8,13 @@
 // was measured against the old poses is stale. A reader takes the room only while
 // "beat" is fresh (the driver writes it every 0.25 s) and the pid is alive.
 //
-// Plain C layout, shared with alignment tools (src/linux/lhdrvrw_room.h is a copy).
+// Plain C layout, shared with alignment tools (src/linux/openhouse_room.h is a copy).
 #pragma once
 #include <stdint.h>
 
-#define LHDRVRW_ROOM_MAGIC 0x4D52484Cu  // "LHRM"
-#define LHDRVRW_ROOM_VERSION 1
-#define LHDRVRW_ROOM_MAX_BASES 16
+#define OPENHOUSE_ROOM_MAGIC 0x4D52484Cu  // "LHRM"
+#define OPENHOUSE_ROOM_VERSION 1
+#define OPENHOUSE_ROOM_MAX_BASES 16
 
 typedef struct {
   char serial[32];       // "LHB-XXXXXXXX"
@@ -24,7 +24,7 @@ typedef struct {
   int32_t pad;
   double p[3], q[4];     // raw frame, q: w x y z
   double sigma;          // m, position uncertainty
-} lhdrvrw_room_base;
+} openhouse_room_base;
 
 typedef struct {
   uint32_t magic, version;
@@ -35,7 +35,7 @@ typedef struct {
   int32_t settled;
   int32_t count;
   char room[64];
-  lhdrvrw_room_base bases[LHDRVRW_ROOM_MAX_BASES];
-} lhdrvrw_room;
+  openhouse_room_base bases[OPENHOUSE_ROOM_MAX_BASES];
+} openhouse_room;
 
-#define LHDRVRW_ROOM_PATH_PREFIX "/lhdrvrw-room-"
+#define OPENHOUSE_ROOM_PATH_PREFIX "/openhouse-room-"

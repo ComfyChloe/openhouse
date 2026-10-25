@@ -45,6 +45,18 @@ find_package(ZLIB REQUIRED)
 find_package(Threads REQUIRED)
 
 # ---- tracking: no hardware dependencies ---------------------------------------
+# ---- lh_common: what every layer shares (log levels) ---------------------------
+add_library(lh_common STATIC src/runtime/log_level.cpp src/common/net.cpp)
+set_target_properties(lh_common PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_compile_features(lh_common PUBLIC cxx_std_20)
+target_include_directories(lh_common PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+if(WIN32)
+  target_link_libraries(lh_common PUBLIC ws2_32)
+endif()
+install(TARGETS lh_common EXPORT lighthouseTargets ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+
 add_library(lh_tracking
   src/tracking/lighthouse_model.cpp
   src/tracking/ootx.cpp
@@ -66,7 +78,7 @@ target_include_directories(lh_tracking PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
   PRIVATE src)
-target_link_libraries(lh_tracking PUBLIC Eigen3::Eigen Ceres::ceres nlohmann_json::nlohmann_json ZLIB::ZLIB Threads::Threads)
+target_link_libraries(lh_tracking PUBLIC lh_common Eigen3::Eigen Ceres::ceres nlohmann_json::nlohmann_json ZLIB::ZLIB Threads::Threads)
 install(TARGETS lh_tracking EXPORT lighthouseTargets ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
@@ -104,7 +116,7 @@ if(LH_BUILD_USB)
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/transport/usb>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
   target_include_directories(lh_usb PRIVATE src)
-  target_link_libraries(lh_usb PUBLIC ${LH_HIDAPI_TARGET} Threads::Threads ZLIB::ZLIB)
+  target_link_libraries(lh_usb PUBLIC lh_common ${LH_HIDAPI_TARGET} Threads::Threads ZLIB::ZLIB)
   if(WIN32)
     target_link_libraries(lh_usb PUBLIC advapi32)
   endif()
@@ -171,7 +183,7 @@ endif()
 option(LH_BUILD_OPENVR_DRIVER "Build the drop-in driver_lighthouse.so" ON)
 find_path(OPENVR_INCLUDE_DIR openvr_driver.h PATH_SUFFIXES openvr)
 if(LH_BUILD_OPENVR_DRIVER AND LH_BUILD_USB AND OPENVR_INCLUDE_DIR)
-  add_library(driver_lighthouse MODULE src/openvr/driver_lighthouse.cpp src/openvr/hand_skeleton.cpp src/openvr/raw_alignment.cpp src/openvr/room_publisher.cpp src/openvr/host_frame.cpp src/openvr/stock_hmd.cpp src/openvr/pairing_mailbox.cpp $<TARGET_OBJECTS:lh_runtime>)
+  add_library(driver_lighthouse MODULE src/openvr/driver_lighthouse.cpp src/openvr/hand_skeleton.cpp src/openvr/raw_alignment.cpp src/openvr/room_publisher.cpp src/openvr/host_frame.cpp src/openvr/stock_hmd.cpp src/openvr/pairing_mailbox.cpp src/openvr/telemetry_server.cpp $<TARGET_OBJECTS:lh_runtime>)
   if(WIN32)
     target_link_libraries(driver_lighthouse PRIVATE setupapi hid)  # stock_hmd: hiding devices from the stock DLL
     set(LH_OPENVR_PLATFORM win64)
@@ -218,6 +230,12 @@ if(LH_BUILD_VIEWER)
     add_executable(lhviz apps/lhviz/main.cpp)
     target_link_libraries(lhviz PRIVATE lh lh_imgui Eigen3::Eigen)
     install(TARGETS lhviz RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    # openhouse-viewer: the running driver's status and log (telemetry over loopback)
+    add_executable(openhouse-viewer apps/openhouse-viewer/main.cpp apps/openhouse-viewer/telemetry_client.cpp
+                   apps/openhouse-viewer/log_view.cpp apps/openhouse-viewer/views.cpp)
+    target_include_directories(openhouse-viewer PRIVATE src)
+    target_link_libraries(openhouse-viewer PRIVATE lh_common lh_imgui nlohmann_json::nlohmann_json)
+    install(TARGETS openhouse-viewer RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
   else()
     message(STATUS "GLFW/OpenGL not found: skipping lhviz")
   endif()
@@ -243,13 +261,14 @@ if(LH_BUILD_TESTS)
     target_link_libraries(lh_unit_tests PRIVATE lh_usb)
     add_executable(lh_replay_tests tests/integration/test_replay.cpp)
     target_compile_definitions(lh_replay_tests PRIVATE LH_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    target_include_directories(lh_replay_tests PRIVATE tests)
     target_link_libraries(lh_replay_tests PRIVATE lh_usb lh_tracking GTest::gtest_main)
     add_test(NAME replay COMMAND lh_replay_tests)
   endif()
   add_test(NAME unit COMMAND lh_unit_tests)
   if(TARGET driver_lighthouse)
-    add_executable(lh_openvr_component_tests tests/openvr/test_components.cpp src/openvr/hand_skeleton.cpp src/openvr/raw_alignment.cpp src/openvr/room_publisher.cpp src/openvr/host_frame.cpp)
-    target_include_directories(lh_openvr_component_tests PRIVATE src ${OPENVR_INCLUDE_DIR})
+    add_executable(lh_openvr_component_tests tests/openvr/test_components.cpp src/openvr/hand_skeleton.cpp src/openvr/raw_alignment.cpp src/openvr/room_publisher.cpp src/openvr/host_frame.cpp src/openvr/telemetry_server.cpp)
+    target_include_directories(lh_openvr_component_tests PRIVATE src tests ${OPENVR_INCLUDE_DIR})
     target_compile_definitions(lh_openvr_component_tests PRIVATE LH_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
     target_link_libraries(lh_openvr_component_tests PRIVATE lh lh_tracking Eigen3::Eigen nlohmann_json::nlohmann_json GTest::gtest_main)
     add_test(NAME openvr_components COMMAND lh_openvr_component_tests)
@@ -264,10 +283,10 @@ if(LH_BUILD_TESTS)
     target_link_libraries(lh_openvr_host_test PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
     add_dependencies(lh_openvr_host_test driver_lighthouse)
     add_test(NAME openvr_driver COMMAND lh_openvr_host_test $<TARGET_FILE:driver_lighthouse>
-      ${CMAKE_SOURCE_DIR}/captures/session-20261016-142931Z-147083/input.lhraw 14)
+      ${CMAKE_SOURCE_DIR}/tests/data/captures/session-20261016-142931Z-147083/input.lhraw 14)
   endif()
   add_executable(lh_runtime_tests tests/runtime/test_runtime.cpp)
-  target_include_directories(lh_runtime_tests PRIVATE src)
+  target_include_directories(lh_runtime_tests PRIVATE src tests)
   target_compile_definitions(lh_runtime_tests PRIVATE LH_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
   if(LH_BUILD_USB)
     target_compile_definitions(lh_runtime_tests PRIVATE LH_TEST_USB=1)

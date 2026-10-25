@@ -1,7 +1,7 @@
 # Multi-station Lighthouse 1.0: 3–4 base stations
 
 Status: **firmware implemented (lhbs `multi.c` + timebase), single-unit validated**; driver not yet. Hardware for testing: 2 stations now, 4 later.
-Applies to lhbs (our firmware) plus a matching change in lhdrvrw (our driver).
+Applies to lhbs (our firmware) plus a matching change in openhouse (our driver).
 Stock-compatible channels stay exactly as they are; multi-station is an opt-in mode.
 
 ## 1. Constraints (measured / decoded from stock)
@@ -113,7 +113,7 @@ the encoding valid for stock-style 2-station operation.
   `0x80 | (N−1) << 4 | s`. The high bit lets the driver auto-detect multi-station
   stations; N and s let it cross-check the cluster assignment.
 - Serial (OOTX bytes 2–5) unchanged, so SteamVR/driver calibration databases keep working.
-- Note: SteamVR's OOTX parser (ported in lhdrvrw `ootx.cpp`) already treats bit 7 of this
+- Note: SteamVR's OOTX parser (ported in openhouse `ootx.cpp`) already treats bit 7 of this
   byte as "mode 4 + parameter" for hardware revision 0x0D; for our hw 9 it computes
   `(byte & 0x7F) + 1` and maps values > 3 to mode 0. The encoding follows Valve's bit-7
   convention; the driver change only needs to extend it to hw 9.
@@ -138,7 +138,7 @@ the encoding valid for stock-style 2-station operation.
    4000-tick presync mask (83 µs) still precedes our flash without hiding the master's.
 7. **Console**: `multi` status (slot, N, counter, master cluster, superframe lock).
 
-## 4. Driver changes (lhdrvrw)
+## 4. Driver changes (openhouse)
 
 Flag `multistation = off | on | auto` (auto: on when any base reports the OOTX multi bit).
 
@@ -196,8 +196,8 @@ sweep attribution errors, correlator lock time, superframe lock stability, pose 
 
 | Date | Setup | Result |
 |---|---|---|
-| 2026-10-18 | lhbs (A101B835) as multi master, N=4, slot 0; stock E236DC40 on channel c (stock slave of it) | SteamVR's original disambiguator: A101B835 sweeps exactly every 4th revolution (176/176 gaps), stock slave every 2nd (352/352); no collisions. ~15 sweeps/s per laser (console). OOTX mode byte 0xB0 received (driver shows "mode 0" = unknown value, as expected before the driver change). lhdrvrw bootstrap: 703 attempts, 0 poses — consistent with the driver assuming stock cadence (driver item 5); to be fixed with the driver changes. |
-| 2026-10-19 | lhbs A101B835 slot 1 + E236DC40 slot 0, N=4, policy MASTER+ACTIVE (lhdrvrw `captures/ms-a`, Index controller) | lhdrvrw multi disambiguator: detected, both OOTX decoded (mode bytes 0xB0/0xB1), tracking on either station alone. **The slave flashed every index event** (P1_0 gate does not suppress a slave's flash), its non-sweeping flashes with data 0 because the OOTX bit only advanced on gated revolutions: slave OOTX at 2 bits / N revolutions (one frame ~12 s at N=4). Slave flash offset settled 235→269→250 us over ~20 s after start-up. |
+| 2026-10-18 | lhbs (A101B835) as multi master, N=4, slot 0; stock E236DC40 on channel c (stock slave of it) | SteamVR's original disambiguator: A101B835 sweeps exactly every 4th revolution (176/176 gaps), stock slave every 2nd (352/352); no collisions. ~15 sweeps/s per laser (console). OOTX mode byte 0xB0 received (driver shows "mode 0" = unknown value, as expected before the driver change). openhouse bootstrap: 703 attempts, 0 poses — consistent with the driver assuming stock cadence (driver item 5); to be fixed with the driver changes. |
+| 2026-10-19 | lhbs A101B835 slot 1 + E236DC40 slot 0, N=4, policy MASTER+ACTIVE (openhouse `captures/ms-a`, Index controller) | openhouse multi disambiguator: detected, both OOTX decoded (mode bytes 0xB0/0xB1), tracking on either station alone. **The slave flashed every index event** (P1_0 gate does not suppress a slave's flash), its non-sweeping flashes with data 0 because the OOTX bit only advanced on gated revolutions: slave OOTX at 2 bits / N revolutions (one frame ~12 s at N=4). Slave flash offset settled 235→269→250 us over ~20 s after start-up. |
 
 ### Changes after the 2026-10-19 test
 
@@ -207,7 +207,7 @@ sweep attribution errors, correlator lock time, superframe lock stability, pose 
   optical load as what the hardware did anyway. Existing EEPROM configs keep their
   policy: set it once with `multi policy all`.
 * OOTX mode byte bit 6 = policy ALL: `0x80 | all << 6 | (N-1) << 4 | slot`
-  (lhdrvrw reads N from bits 4-5).
+  (openhouse reads N from bits 4-5).
 * A multi slave only emits once its phase error is < 20 us for 20 consecutive master
   flashes, and stops above 40 us (was: correlator locked + superframe confirmed).
 
@@ -277,8 +277,7 @@ master again, and don't time out to stand-by while they hear one.
 
 Seen from the driver in Beat Saber captures: a slave's first sweeping flash of its turn
 sometimes decoded as axis 1 while its laser swept axis 0 (A101B835 ~9.5 % of sweeps,
-89AE90F2 4.8 %, D7B1AD76 1.5 %). The driver drops such sweeps (`disambiguator_multi.cpp`,
-`LH_DEBUG_AXIS=1`).
+89AE90F2 4.8 %, D7B1AD76 1.5 %). The driver drops such sweeps (`disambiguator_multi.cpp`).
 
 Cause, measured on A101B835 (slot 2) with an instrumented build: the flash ends in the
 CT32B0 handler (index capture -> MR0 = t + width), which ran at priority 2, below CT32B1.

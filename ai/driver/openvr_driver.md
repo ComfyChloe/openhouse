@@ -177,8 +177,8 @@ build/lh_openvr_host_test build/openvr/lighthouse/bin/linux64/driver_lighthouse.
 build/lh_openvr_host_test build/openvr/lighthouse/bin/linux64/driver_lighthouse.so live 20   # real devices
 ```
 
-Environment: `LH_REPLAY=capture.lhraw` (driver replays instead of USB), `LH_VERBOSE=1`
-(log tracking state changes and every haptic write), `LH_CAPTURE=<dir>` (record a
+Environment: `LH_REPLAY=capture.lhraw` (driver replays instead of USB), `LH_LOG_LEVEL=DEBUG`
+(the host log also gets DEBUG messages: coasting transitions, every haptic write), `LH_CAPTURE=<dir>` (record a
 diagnostic session from inside the host, see `capture.md`). Disabled devices (lhviz checkbox,
 `~/.config/lh/settings.json`) are not registered.
 
@@ -264,5 +264,4 @@ Additional environment: `LH_HAND_POSES` overrides the Valve GLB path;
 `LH_STEAM_DB=auto` (or a lighthousedb.json path). The host frame is our room's;
 `LH_HOST_FRAME=steamvr` pins it to lighthousedb.json's anchor instead
 (`LH_REFERENCE_DB` overrides that file). `STEAMVR_PATH` also
-helps locate assets for nonstandard Steam installs. `LH_VERBOSE=1` logs haptic
-routing. Only `HmdDriverFactory` is exported.
+helps locate assets for nonstandard Steam installs. Haptic routing is logged at DEBUG level. Only `HmdDriverFactory` is exported.

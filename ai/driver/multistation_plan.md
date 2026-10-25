@@ -10,8 +10,7 @@ differs.
 * A separate `MultiDisambiguator` runs beside the stock `TdmDisambiguator` on every
   pulse (TrackingSource). The stock port is not touched (oracle tests unchanged).
   When the multi one becomes `Active()`, frames and base configs come from it and the
-  stock path's are dropped. `LH_MULTISTATION=auto|on|off` (default auto),
-  `LH_DEBUG_MULTI` (per-station stats every 5 s, stderr).
+  stock path's are dropped. `LH_MULTISTATION=auto|on|off` (default auto).
 * Detection: flashes of one index event 250/500/750 us apart (not 417): 50 such pairs
   with > 5x more than 417 us pairs; or a lone station sweeping after < 35 % of its
   flashes; or an OOTX mode byte with bit 7. 0 false detections on all 8 stock captures
@@ -74,7 +73,7 @@ N = 4 with stations that never sweep in consecutive revolutions, superframe chec
 * Multi and stock channels (A/b/c) never mix in one room.
 
 Firmware test log (2026-10-18): SteamVR's own disambiguator follows the schedule
-(A101B835 every 4th revolution), and **lhdrvrw acquired nothing (703 bootstrap
+(A101B835 every 4th revolution), and **openhouse acquired nothing (703 bootstrap
 attempts, 0 poses)**. Section 2 explains why.
 
 ## 2. What breaks in our driver, and where

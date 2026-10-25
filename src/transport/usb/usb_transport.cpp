@@ -1,3 +1,4 @@
+#include <cstdarg>
 #include <array>
 #include "usb_transport.hpp"
 #include "device_config.hpp"
@@ -18,6 +19,18 @@
 #include <thread>
 
 namespace lh::usb {
+
+// A message for the sink (the session: its event log, the driver's log, the viewer).
+void UsbTransport::Log(LogLevel level, const char* format, ...) {
+  char text[512];
+  va_list args;
+  va_start(args, format);
+  std::vsnprintf(text, sizeof text, format, args);
+  va_end(args);
+  std::string line = text;
+  while (!line.empty() && line.back() == '\n') line.pop_back();
+  sink_->OnTransportLog(level, line);
+}
 namespace {
 
 constexpr uint16_t kValveVid = 0x28de;
@@ -191,7 +204,7 @@ UsbTransport::OpenResult UsbTransport::OpenEndpoint(const hid_device_info* d, Op
   hid_device* h = hid_open_path(d->path);
   if (!h) {
     std::lock_guard lock(pathsMutex_);
-    if (failedPaths_.insert(d->path).second) fprintf(stderr, "lh: cannot open %s\n", d->path);
+    if (failedPaths_.insert(d->path).second) Log(LogLevel::Warn, "cannot open %s\n", d->path);
     return OpenResult::Failed;
   }
   {
@@ -214,8 +227,7 @@ UsbTransport::OpenResult UsbTransport::OpenEndpoint(const hid_device_info* d, Op
   DeviceInfo di;
   // Short query: a receiver without a device keeps answering "nothing yet".
   const bool haveInfo = kind == EndpointKind::Wireless && QueryDeviceInfo(h, &di, 1);
-  if (getenv("LH_DEBUG_USB"))
-    fprintf(stderr, "lh: %s pid %04x iface %d: device info %s serial %08X in %.0f ms\n", o.info.serial.c_str(), o.info.pid,
+  Log(LogLevel::Debug, "%s pid %04x iface %d: device info %s serial %08X in %.0f ms\n", o.info.serial.c_str(), o.info.pid,
             o.info.iface, haveInfo ? "ok" : "failed", di.serial, (HostNow() - t0) * 1000);
   if (kind == EndpointKind::Wireless && (!haveInfo || di.serial == 0)) {
     // No device on this receiver (yet): reading its range modes and config would
@@ -234,7 +246,7 @@ UsbTransport::OpenResult UsbTransport::OpenEndpoint(const hid_device_info* d, Op
     SetReceiver(o, sn);
   }
   CompleteSetup(o, haveInfo && di.supportsVersioning);
-  if (getenv("LH_DEBUG_USB")) fprintf(stderr, "lh: %s set up in %.0f ms\n", o.info.serial.c_str(), (HostNow() - t0) * 1000);
+  Log(LogLevel::Debug, "%s set up in %.0f ms\n", o.info.serial.c_str(), (HostNow() - t0) * 1000);
   return OpenResult::Ready;
 }
 
@@ -267,7 +279,7 @@ void UsbTransport::Enumerate(bool startup) {
       std::lock_guard lock(pathsMutex_);
       paths_.insert(o.path);
     }
-    if (!startup) fprintf(stderr, "lh: %s: plugged in (%s)\n", o.info.serial.c_str(), o.path.c_str());
+    if (!startup) Log(LogLevel::Info, "%s: plugged in (%s)\n", o.info.serial.c_str(), o.path.c_str());
     if (result == OpenResult::Idle) { idle_.push_back(o); continue; }
     if (startup) {
       capture_.WriteEndpoint(o.info);
@@ -285,7 +297,7 @@ void UsbTransport::Enumerate(bool startup) {
   // A receiver unplugged while it had no device: nothing reads it, so notice here.
   for (size_t i = 0; i < idle_.size();) {
     if (present.count(idle_[i].path)) { ++i; continue; }
-    fprintf(stderr, "lh: receiver %s unplugged\n", idle_[i].receiver.c_str());
+    Log(LogLevel::Info, "receiver %s unplugged\n", idle_[i].receiver.c_str());
     DropReceiver(idle_[i].receiver);
     hid_close(idle_[i].dev);
     {
@@ -301,7 +313,7 @@ bool UsbTransport::Start() {
   decoder_ = ReportDecoder(sink_);  // no stale unwrap/protocol state after Stop/Start
   if (hid_init() != 0) return false;
   if (!opts_.capturePath.empty() && !capture_.Open(opts_.capturePath)) {
-    fprintf(stderr, "lh: cannot open capture %s\n", opts_.capturePath.c_str());
+    Log(LogLevel::Error, "cannot open capture %s\n", opts_.capturePath.c_str());
     return false;
   }
   nextEp_ = 0;
@@ -315,7 +327,7 @@ bool UsbTransport::Start() {
   // Interfaces that exist but can't be opened are held by someone else (SteamVR):
   // fail. With none plugged in at all, run and wait for one (hotplug).
   if (open_.empty() && idle_.empty() && unopenable) return false;
-  if (open_.empty() && idle_.empty()) fprintf(stderr, "lh: no Lighthouse receivers yet; waiting for one to be plugged in\n");
+  if (open_.empty() && idle_.empty()) Log(LogLevel::Info, "no Lighthouse receivers yet; waiting for one to be plugged in\n");
   thread_ = std::thread(&UsbTransport::Run, this);
   probe_ = std::thread(&UsbTransport::ProbeMain, this);
   return true;
@@ -355,12 +367,11 @@ void AddSensorType(std::string* json, int type) {
 void UsbTransport::CompleteSetup(Open& o, bool supportsVersioning) {
   if (o.info.kind != EndpointKind::Optical) {
     o.sensorType = ReadSensorType(o.dev);
-    if (getenv("LH_DEBUG_USB") || o.sensorType < 0)
-      fprintf(stderr, "lh: %s: hardware sensor type %s\n", o.info.serial.c_str(),
+      Log(LogLevel::Debug, "%s: hardware sensor type %s\n", o.info.serial.c_str(),
               o.sensorType < 0 ? "unavailable (inferring from sync widths)" : std::to_string(o.sensorType).c_str());
   }
   if (o.info.kind != EndpointKind::Optical && !FetchRangeModes(o.dev, o.info.gyroRange, o.info.accelRange))
-    fprintf(stderr, "lh: %s: unable to fetch gyro/accelerometer range modes\n", o.info.serial.c_str());
+    Log(LogLevel::Warn, "%s: unable to fetch gyro/accelerometer range modes\n", o.info.serial.c_str());
   // The device's own config, read once per session (as the stock driver: a config
   // rewritten with lighthouse_console takes effect on the next start); SteamVR's cached
   // copy only if the device can't be read. LH_PREFER_STEAM_CONFIG=1: the cache first.
@@ -376,12 +387,12 @@ void UsbTransport::CompleteSetup(Open& o, bool supportsVersioning) {
       const double t0 = HostNow();
       if (ReadDeviceConfig([&](uint8_t* data, size_t size) { return hid_get_feature_report(o.dev, data, size); },
                            &o.info.configJson, &error)) {
-        fprintf(stderr, "lh: %s: read device config (%zu bytes) in %.0f ms\n", o.info.serial.c_str(), o.info.configJson.size(),
+        Log(LogLevel::Info, "%s: read device config (%zu bytes) in %.0f ms\n", o.info.serial.c_str(), o.info.configJson.size(),
                 (HostNow() - t0) * 1000);
         std::lock_guard lock(configMutex_);
         sessionConfigs_[o.info.serial] = o.info.configJson;
       } else {
-        fprintf(stderr, "lh: %s: device config unavailable (%s); using SteamVR's cached copy\n", o.info.serial.c_str(), error.c_str());
+        Log(LogLevel::Warn, "%s: device config unavailable (%s); using SteamVR's cached copy\n", o.info.serial.c_str(), error.c_str());
       }
     }
     if (o.info.configJson.empty()) o.info.configJson = LoadSteamConfig(opts_.steamLighthouseConfigDir, o.info.serial);
@@ -391,11 +402,9 @@ void UsbTransport::CompleteSetup(Open& o, bool supportsVersioning) {
 }
 
 void UsbTransport::RequestVersion(Open& o) {
-  // LH_WIRELESS_PROTOCOL overrides the requested version (testing the legacy path).
-  const char* pv = getenv("LH_WIRELESS_PROTOCOL");
-  wirelessProtocol_ = pv ? atoi(pv) : 1;
-  if (!o.versionRequestTime || getenv("LH_DEBUG_USB"))
-    fprintf(stderr, "lh: %s: protocol versioning supported, requesting %d\n", o.info.serial.c_str(), wirelessProtocol_);
+  wirelessProtocol_ = 1;
+  if (!o.versionRequestTime)
+    Log(LogLevel::Debug, "%s: protocol versioning supported, requesting %d\n", o.info.serial.c_str(), wirelessProtocol_);
   decoder_.SetVersionNegotiation(o.info.ep);
   decoder_.Wireless(o.info.ep)->SetPendingVersionRequest();
   o.versionRequestTime = HostNow();  // retry even if the first HID write fails
@@ -447,7 +456,7 @@ bool UsbTransport::TakePairing(Open& o) {
   report[4] = uint8_t(command.milliseconds & 0xff);
   report[5] = uint8_t(command.milliseconds >> 8);
   const int n = hid_send_feature_report(o.dev, report.data(), report.size());
-  fprintf(stderr, "lh: receiver %s: pairing %s (%d ms): %s\n", o.receiver.c_str(), command.milliseconds ? "on" : "off",
+  Log(LogLevel::Info, "receiver %s: pairing %s (%d ms): %s\n", o.receiver.c_str(), command.milliseconds ? "on" : "off",
           command.milliseconds, n == int(report.size()) ? "sent" : "failed");
   return n == int(report.size()) && command.milliseconds > 0;
 }
@@ -463,7 +472,7 @@ void UsbTransport::ProbeMain() {
       char sn[16];
       snprintf(sn, sizeof sn, "LHR-%08X", di.serial);
       o.info.serial = sn;
-      fprintf(stderr, "lh: %s: connected to receiver %s\n", sn, o.receiver.c_str());
+      Log(LogLevel::Info, "%s: connected to receiver %s\n", sn, o.receiver.c_str());
       SetReceiver(o, sn);
       o.info.ep = nextEp_++;
       CompleteSetup(o, di.supportsVersioning);
@@ -567,7 +576,7 @@ void UsbTransport::Run() {
       }
       if (opts_.onCommandResult) opts_.onCommandResult(result);
       else if (std::string(result.status) != "written")
-        fprintf(stderr, "lh: %s: %s %s (%d bytes)\n", command.serial.c_str(), command.powerOff ? "power-off" : "haptic", result.status, result.bytes);
+        Log(LogLevel::Debug, "%s: %s %s (%d bytes)\n", command.serial.c_str(), command.powerOff ? "power-off" : "haptic", result.status, result.bytes);
     }
     for (auto& o : open_) {
       // Pairing a receiver that has a device: the device is replaced, so the receiver
@@ -597,7 +606,7 @@ void UsbTransport::Run() {
         decoder_.OnReport(reps[i].t, o.info.ep, last, reps[i].buf, size_t(reps[i].n));
         if (o.info.kind == EndpointKind::Wireless && decoder_.WirelessGeneration(o.info.ep) != o.generation) {
           o.generation = decoder_.WirelessGeneration(o.info.ep);
-          fprintf(stderr, "lh: %s: radio epoch changed; resetting protocol and timestamp state\n", o.info.serial.c_str());
+          Log(LogLevel::Info, "%s: radio epoch changed; resetting protocol and timestamp state\n", o.info.serial.c_str());
           if (o.wantVersion) RequestVersion(o);
         }
       }
@@ -607,7 +616,7 @@ void UsbTransport::Run() {
     // comes back (as a new endpoint; the device keeps its id).
     for (auto it = open_.begin(); it != open_.end();) {
       if (!it->disconnected) { ++it; continue; }
-      fprintf(stderr, "lh: %s: unplugged (%s)\n", it->info.serial.c_str(), it->path.c_str());
+      Log(LogLevel::Info, "%s: unplugged (%s)\n", it->info.serial.c_str(), it->path.c_str());
       if (!it->receiver.empty()) DropReceiver(it->receiver);
       hid_close(it->dev);
       decoder_.RemoveEndpoint(it->info.ep);

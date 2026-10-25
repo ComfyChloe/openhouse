@@ -349,16 +349,7 @@ Result SolveMultiStartImpl(const TrackedObjectModel& obj, const BaseConfig& base
 
 Result SolveMultiStart(const TrackedObjectModel& obj, const BaseConfig& base, const std::vector<OpticalSample>& samples,
                        bool* ambiguous, std::vector<int>* dropped) {
-  static const bool timing = std::getenv("LH_DEBUG_MS_TIME") != nullptr;
-  const auto t0 = std::chrono::steady_clock::now();
   Result r = SolveMultiStartImpl(obj, base, samples, ambiguous, dropped);
-  if (timing) {
-    static thread_local double total = 0, worst = 0;
-    static thread_local int n = 0;
-    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-    total += ms; worst = std::max(worst, ms);
-    if (++n % 20 == 0) std::fprintf(stderr, "multi-start: %d calls, mean %.1f ms, worst %.1f ms (%zu samples)\n", n, total / n, worst, samples.size());
-  }
   return r;
 }
 
@@ -419,12 +410,6 @@ Result SolveMultiStartImpl(const TrackedObjectModel& obj, const BaseConfig& base
       // whose stock-noise fit never quite converges (live: 330 urad rms for minutes).
       const Result r = Solve(obj, base, samples, &start, kMultiStartNoise);
       if (r.status == 2) return r;  // insufficient samples: no start helps
-      if (std::getenv("LH_DEBUG_BOOTSTRAP") && std::isfinite(r.cost) && r.pose.p[2] < -0.1) {
-        static thread_local double lowest = 1e300;
-        static thread_local int n = 0;
-        lowest = std::min(lowest, r.cost);
-        if (++n % 2400 == 0) { std::fprintf(stderr, "multi-start: lowest rms %.0f urad over %zu samples (noise 188)\n", std::sqrt(lowest) * 1e6, samples.size()); lowest = 1e300; }
-      }
       if (!std::isfinite(r.cost) || r.pose.p[2] > -0.1) continue;
       // A fit that needs a sensor facing away isn't the pose; neither is a miss
       // caused by one. Either way: without them.
@@ -432,15 +417,6 @@ Result SolveMultiStartImpl(const TrackedObjectModel& obj, const BaseConfig& base
       std::vector<int> away;
       const Result clean = FacesAll(obj, r.pose, samples, 0.2) ? r
                                                               : WithoutReflections(obj, base, samples, r, &away, kMultiStartNoise);
-      if (std::getenv("LH_DEBUG_RESID") && !away.empty()) {
-        static int calls = 0;
-        if (calls++ % 300 == 0) {
-          std::fprintf(stderr, "without %zu reflected: status %d rms %.0f urad at (%.2f %.2f %.2f):", away.size(), clean.status,
-                       std::sqrt(clean.cost) * 1e6, clean.pose.p[0], clean.pose.p[1], clean.pose.p[2]);
-          for (int a : away) std::fprintf(stderr, " -s%d", a);
-          std::fprintf(stderr, "\n");
-        }
-      }
       if (!std::isfinite(clean.cost) || clean.pose.p[2] > -0.1) continue;
       if (clean.status != 0) {
         if (clean.status == 1 && !away.empty()) keepMiss(clean, away);
@@ -449,13 +425,6 @@ Result SolveMultiStartImpl(const TrackedObjectModel& obj, const BaseConfig& base
       found.push_back(clean);
       if (best.status != 0 || clean.cost < best.cost) { best = clean; bestDropped = away; }
     }
-  }
-  static const bool debugMs = std::getenv("LH_DEBUG_MS") != nullptr;
-  if (debugMs) {
-    std::fprintf(stderr, "multi-start: %zu converged, %zu near misses\n", found.size(), misses.size());
-    for (const auto& m : misses)
-      std::fprintf(stderr, "  miss (%.3f %.3f %.3f) rms %.0f urad, %zu reflected out\n", m.r.pose.p[0], m.r.pose.p[1], m.r.pose.p[2],
-                   std::sqrt(m.r.cost) * 1e6, m.away.size());
   }
   // Trim the worst-fitting sensor from each near miss, up to three times.
   for (const auto& miss : misses) {
@@ -470,7 +439,6 @@ Result SolveMultiStartImpl(const TrackedObjectModel& obj, const BaseConfig& base
       subset.erase(std::remove_if(subset.begin(), subset.end(), [worst](const OpticalSample& s) { return s.sensor == worst; }), subset.end());
       out.push_back(worst);
       r = Solve(obj, base, subset, &r.pose, kMultiStartNoise);
-      if (debugMs) std::fprintf(stderr, "    trim s%d -> status %d rms %.0f at (%.3f %.3f %.3f)\n", worst, r.status, std::sqrt(r.cost) * 1e6, r.pose.p[0], r.pose.p[1], r.pose.p[2]);
       if (r.status == 2 || !std::isfinite(r.cost)) break;
       if (r.status == 0 && r.pose.p[2] <= -0.1 && FacesAll(obj, r.pose, subset, 0.2)) {
         found.push_back(r);

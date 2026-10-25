@@ -9,7 +9,7 @@
 //  1. Every pulse is stored per sensor. Pulses whose width is a valid LH1 sync width
 //     are clustered by phase (fmod(t, 1/60) / (1/60)).
 //  2. Every 0.125 s, pairs of clusters half a period apart (the two axis syncs of one
-//     base) that are seen consistently become base stations ("tdm sync acquired").
+//     base) that are seen consistently become base stations ("sync timing lock").
 //  3. Sync flashes are predicted every half period; candidates (sync-width pulses seen
 //     by several sensors at the same time) near the prediction are matched to bases,
 //     update their timing (period, jitter) and feed their OOTX data bit.

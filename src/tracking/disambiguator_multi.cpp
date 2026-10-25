@@ -174,20 +174,6 @@ void MultiDisambiguator::CloseGroup() {
   if (ref_ != 0) halfIndex_ += steps;
   ref_ = newRef;
 
-  static const bool debug = std::getenv("LH_DEBUG_MULTI") != nullptr;
-  if (debug && (flashes.front().start > nextDebug_ || flashes.front().start < nextDebug_ - 10)) {
-    nextDebug_ = flashes.front().start + 5;
-    std::string line = "multi debug: t " + std::to_string(flashes.front().start) + (active_ ? " ACTIVE" : "") + " period " + std::to_string(period_ * 1e3) + " ms";
-    for (int s = 0; s < kMaxSlots; ++s) {
-      const auto& st = stations_[s];
-      if (!st.seen) continue;
-      char buf[200];
-      snprintf(buf, sizeof buf, " | slot %d serial %08X frames %d flashes %d sweeps %d bits0 %d bits1 %d nodata %d", s, st.serial, st.frames,
-               st.flashes, st.sweeps, st.bits[0], st.bits[1], st.bits[2]);
-      line += buf;
-    }
-    fprintf(stderr, "%s\n", line.c_str());
-  }
   // Stations in the schedule: from the OOTX mode byte, else the master's sweep share.
   if (stationCount_ == 0) {
     for (const auto& st : stations_) if (st.multiN >= 2) stationCount_ = st.multiN;
@@ -231,15 +217,9 @@ void MultiDisambiguator::CloseGroup() {
       // sometimes decoded as axis 1, and the filter, reading horizontal angles as vertical
       // (0.33 rad off), threw the controller 0.7-1.8 m. Dropping one sweep costs nothing.
       const int expected = st.lastSweepHalf == halfIndex_ - 1 && st.lastSweepAxis == 0 ? 1 : 0;
-      const int64_t previousHalf = st.lastSweepHalf;
       st.lastSweepHalf = halfIndex_;
       st.lastSweepAxis = expected;  // what this sweep was, whatever it decoded as
       if (f.sync.axis != expected) {
-        static const bool debugAxis = std::getenv("LH_DEBUG_AXIS") != nullptr;
-        if (debugAxis)
-          fprintf(stderr, "AXIS slot %d decoded %d expected %d width %.2f us nominal %.2f us data %d last %lld now %lld\n", s,
-                  f.sync.axis, expected, f.width * 1e6, f.sync.nominal * 1e6, f.sync.data, (long long)previousHalf,
-                  (long long)halfIndex_);
         if (++st.axisMismatches <= 3 || st.axisMismatches % 100 == 0) {
           char buf[128];
           snprintf(buf, sizeof buf, "multi: slot %d swept axis %d out of sequence (expected %d), dropped (%d so far)\n", s,

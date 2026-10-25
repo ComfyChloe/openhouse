@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Decode an OOTX frame (hex bytes as printed by the lhbs 'ootx' command) using
-the framing rules from lhdrvrw ai/driver/disambiguator_tdm.md, independent of lhbs's
+the framing rules from openhouse ai/driver/disambiguator_tdm.md, independent of lhbs's
 encoder: >=17 zeros, '1', then 16-bit words each followed by a '1' stuffing bit;
 u16 length, payload, pad to even, crc32 (zlib)."""
 import struct, sys, zlib

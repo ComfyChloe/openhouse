@@ -7,6 +7,9 @@
 // rather than globally by timestamp. The source/disambiguator handles that order.
 #pragma once
 
+#include <string>
+
+#include "lh/log_level.hpp"
 #include "lh/types.hpp"
 
 namespace lh {
@@ -36,6 +39,9 @@ class IInputSink {
   // Controller input / battery (wireless devices). Default: ignored.
   virtual void OnInput(const DeviceId&, const InputReport&) {}
   virtual void OnBattery(const DeviceId&, const BatteryReport&) {}
+  // The transport's own messages (devices plugged in, receivers, failures). Default:
+  // stderr, so a bare transport still says what it does.
+  virtual void OnTransportLog(LogLevel level, const std::string& text);
 };
 
 // Convenience base with no-op handlers.

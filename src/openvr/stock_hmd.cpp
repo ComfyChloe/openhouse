@@ -297,7 +297,7 @@ class StockHmd::DeviceProxy : public ITrackedDeviceServerDriver {
       // SteamVR sends "leave standby" when it comes up and the stock driver powers the
       // headset's panels then; other hosts (Monado) never do, and the panels stay dark.
       // Harmless under SteamVR (it is out of standby already).
-      if (!std::getenv("LH_NO_STOCK_WAKE")) {
+      {
         VREvent_t wake{};
         wake.eventType = VREvent_LeaveStandbyMode;
         wake.trackedDeviceIndex = id;
@@ -561,9 +561,8 @@ StockHmd::Presence StockHmd::HeadsetPresent(std::string* which, std::vector<std:
   for (auto* d = list; d; d = d->next) {
     const std::wstring product = d->product_string ? d->product_string : L"";
     Presence p = Presence::No;
-    if (d->product_id == 0x2000 && !std::getenv("LH_STOCK_PROBE_ALL")) p = Presence::Yes;
-    else if (d->product_id == 0x2300 && (product.find(L"Controller") == std::wstring::npos || std::getenv("LH_STOCK_PROBE_ALL")))
-      p = Presence::Maybe;  // LH_STOCK_PROBE_ALL: controllers too (tests the config check)
+    if (d->product_id == 0x2000) p = Presence::Yes;
+    else if (d->product_id == 0x2300 && product.find(L"Controller") == std::wstring::npos) p = Presence::Maybe;
     if (p == Presence::No) continue;
     char id[16];
     std::snprintf(id, sizeof id, "28de:%04x ", d->product_id);

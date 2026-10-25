@@ -1,12 +1,13 @@
 # Agent handoff: start here
 
 This folder is the working knowledge for AI agents continuing this project. Human-facing
-documentation is written separately by the owner; do not add Markdown outside `ai/`.
+documentation is the root `README.md`, written by the owner (in their voice: casual,
+short). Don't add other Markdown outside `ai/`.
 
 ## The project
 
-* **lhdrvrw / liblighthouse** (repository root): a reverse-engineered, improvable C++20
-  reimplementation of Valve's Lighthouse 1.0 tracking (`driver_lighthouse`). It ships as a
+* **openhouse / liblighthouse** (repository root): a reverse-engineered, improvable C++20
+  reimplementation of Valve's Lighthouse 1.0 and 2.0 tracking (`driver_lighthouse`). It ships as a
   drop-in OpenVR driver (`driver_lighthouse.so` / `.dll`) for SteamVR and for Monado's
   `steamvr_lh`, plus tools (capture, replay, viewer). The owner runs it under Monado +
   WiVRn with a Quest headset (alignment tools aligns the Quest with the Lighthouse room),
@@ -21,14 +22,21 @@ Goals and constraints (from the owner):
   provenance (stock addresses, constants), not bit-for-bit transliteration.
 * Long-term aim: **better than stock SteamVR tracking**. Improvements live outside the
   stock filter core (`DeviceTracker`, `SetImprovements`, env switches for A/B), so the
-  oracle tests keep checking the stock behaviour.
+  oracle tests keep checking the stock behaviour. `LH_STOCK_FILTER` turns the
+  improvements off for comparisons; add per-change switches locally while testing and
+  remove them before the change lands (the release has none).
 * USB transport stays separate from tracking (`lh::IInputSink`); tracking must not
   depend on hidapi.
 * Device roles come from each device's JSON config (`device_class`), never from the
-  hardware: the owner maps some Index controllers and wands as generic trackers.
-* Only tracked devices matter (controllers, trackers, bases); no HMD display work.
-* Lighthouse 1.0, and LH2 (2.0 base stations) in progress: `driver/lh2_support.md`. Making LH1
-  bases emit LH2-style light was researched and set aside: `driver/lh1_as_lh2_research.md`.
+  hardware: the owner maps some Index controllers as generic trackers. Vive wands are
+  controllers (`ControllerType::ViveWand`, libsurvive button map; untested on hardware).
+* Headsets: tracked by us; their display comes from SteamVR's stock driver loaded at
+  runtime for the headset only (`src/openvr/stock_hmd.cpp`). Never ship Valve's files.
+* Lighthouse 1.0 and 2.0 both work (`driver/lh2_support.md`). Making LH1 bases emit
+  LH2-style light was researched and set aside: `driver/lh1_as_lh2_research.md`.
+* Release hygiene: no Valve/HTC text or data in the repo (stock log wording, firmware
+  descriptions), no stderr debug prints (use DEBUG-level log messages), the name is
+  openhouse everywhere.
 * **Commit only when the owner asks.** Ask for hardware captures when a real-device test
   is needed; don't guess hardware behaviour.
 
@@ -39,13 +47,14 @@ Goals and constraints (from the owner):
 | `src/transport/usb` | HID transport, report/wireless decoding, raw capture (`.lhraw`) |
 | `src/tracking` | sync/sweep disambiguation (stock TDM, `disambiguator_multi` for lhbs multi), pose solver, the stock EKF (`direct_filter`, `lighthouse_direct`) |
 | `src/runtime` | `Session`, `DeviceTracker` (improvements), room map and room solver |
-| `src/openvr` | the OpenVR driver (devices, inputs, skeleton, host frame, room publisher) |
+| `src/openvr` | the OpenVR driver (devices, inputs, skeleton, host frame, room publisher, stock HMD, pairing, telemetry server) |
+| `src/common` | small shared pieces (loopback sockets) |
 | `src/platform` | OS helpers (paths, precise sleep) |
-| `apps/` | `lhtool` (replay/session/track), `lhcapture` (recorder), `lhviz` (viewer), `lhhaptics`, `lhidentify` |
+| `apps/` | `openhouse-viewer` (live status of the running driver), `lhtool` (replay/session/track), `lhcapture` (recorder), `lhviz` (developer viewer), `lhhaptics`, `lhidentify` |
 | `tests/` | unit, runtime, OpenVR component/mock-host, oracle tests (load the original binary) |
 | `tools/` | `eval_replay.sh/.py` (tracking scorer), RE helpers |
-| `scripts/` | Linux install (`steamvr-driver.sh`), packaging, Windows cross-build |
-| `basestation_firmware` | the firmware (`src/`, `test/`, `Makefile`); `tools/` flashing and console. `fw/`, `patches/`, `re/` are local only |
+| `scripts/` | Linux install (`steamvr-driver.sh`), packaging (`package-driver.py`, `package-windows.py`, `package-firmware.py`), Windows cross-build |
+| `basestation_firmware` | the firmware (`src/`, `test/`, `Makefile`); `tools/` flashing and console; `installer/` the end-user installers (Linux sh, Windows ps1/bat). `fw/`, `patches/`, `re/`, `bsfirmwares/`, `backups/` are local only |
 | `re/ghidra_scripts` | headless Ghidra scripts. The rest of `re/` (project, decompiles) is local only |
 
 Not in git, on purpose: Valve's binaries, decompiled code, HTC firmware images and flash
@@ -83,11 +92,11 @@ Captures (owner's machine; ask for them if absent):
   for F in 0 120 200 230 260 and count "out of bounds" resets. Beat Saber is the owner's
   top priority: a change must keep these clean.
 
-Debug switches (env): `LH_DEBUG_UPDATE[=all]` (large filter updates and frame rejections),
-`LH_DEBUG_AXIS` (out-of-sequence sweeps), `LH_DEBUG_MULTI`, `LH_DEBUG_SOLVER`,
-`LH_DEBUG_REJECT`. A/B: `LH_STOCK_FILTER`, `LH_NO_SWING`, `LH_NO_FRAME_GATE`. Recording
-inside the host: `LH_CAPTURE=DIR` or `capture` under `driver_lighthouse` in
-`steamvr.vrsettings`.
+Logs and diagnostics: every message has a level (DEBUG/INFO/WARN/ERR). Replays print
+them with `lhtool session` (`"level"` field); live, the host log gets INFO+ unless
+`LH_LOG_LEVEL=DEBUG`, and `openhouse-viewer` shows everything. Recording inside the host:
+`LH_CAPTURE=DIR` or `capture` under `driver_lighthouse` in `steamvr.vrsettings`; the
+recording has `driver.jsonl` (what the driver did and logged) next to `input.lhraw`.
 
 ## The owner's setup
 
@@ -95,33 +104,33 @@ Four LH1 bases on lhbs multi-station: slots 1-4 = E236DC40 (master), A101B835, D
 89AE90F2 (older 15-diode unit). 89AE90F2's calibration was once wiped by HTC's
 "calibration-rescue-244" firmware and restored from a flash backup: **never suggest that
 firmware**. Devices: Index controllers (LHR-13DA81D1 right, LHR-8F9BE6F2 left), trackers,
-an Index HMD used only as a sensor.
+a Vive headset (LHR-0704E07A). Quest Pro through WiVRn for VRChat.
+An alignment tool reads the room from `/openhouse-room-<uid>`
+(`include/lh/room_shm.h`; its copy `src/linux/openhouse_room.h` must stay identical).
 
-## State of the work (2026-10-22)
+## State of the work (2026-10-25)
 
-Recently done (details in `driver/tracking_improvements.md`):
-* Beat Saber fly-aways fixed: slave bases' mislabelled sync axis is dropped in
-  `disambiguator_multi`, and `DirectFilter::Update` rejects whole frames that would throw
-  the device more than 10 cm (owner chose to apply it in violent motion too).
-* Room solver: exact Schur-complement base covariance instead of `ceres::Covariance`,
-  hand-derived `AngleCost` Jacobian, solve backoff; fixed a fatal Ceres abort.
-* Windows: `IVRDriverInput_005` for buttons (see below), precise sleeps
-  (`platform::SleepFor`), MSVC build.
+Done recently:
+* Release clean-up: renamed to openhouse, debug/A-B switches removed, log levels,
+  copied Valve text removed, README written.
+* `openhouse-viewer` + driver telemetry (`src/openvr/telemetry_server.*`).
+* Room locks (well-placed bases only move on their accelerometer), stale-room detection
+  (turned origin -> new room), transport messages in the session log.
+* Headset hybrid (stock display, our pose), SteamVR pairing menu, roles, hand slots,
+  power-off on exit, configs read from devices per session.
+* lhbs firmware installer (`basestation_firmware/installer`); the Windows script is
+  untested on Windows.
 
 Open:
-* **LH2 support** works on recordings; next: switch devices to LH2 light mode in the
-  driver, tune LH2 tracking, live test (`driver/lh2_support.md`). LH2 captures:
-  `~/lh-captures/session-20261022-170505Z-79354` (1 controller) and `-171923Z-81871` (5 devices).
-* HMD support plan (later): load the stock driver at runtime for the HMD's display only.
-* Wrong sync axis from slaves: fixed in lhbs (flash-end IRQ priority,
-  `firmware/MULTISTATION.md`). Flash the fixed build to every slave; the driver's drop
-  stays as a guard.
-* Live check of the input path under Monado: the driver logs `input components through
-  IVRDriverInput_005` or `_004`; confirm buttons work.
-* The Windows build installed on the owner's PC predates the latest fixes (axis drop,
-  frame gate rework, solver crash fix): rebuild it there.
-* `driver/PROGRESS.md` and `driver/closing_the_gap.md`: remaining parity work with the
-  stock tracker.
+* A base seen well by only one device (the owner's channel 3, `D7B1AD76`, which mostly
+  sees one corner) never reaches the lock and gets relearned from poor views; the still
+  headset tracking from it moves with it (`test2still`). Next: weight keyframes by how
+  well the device sees both bases, or require two devices before re-placing.
+* Fly-aways right after a reacquire or a base newly used from the room map (friend's
+  `live3-4`, 2.0): the contradiction check now catches them within ~1 s; the cause (the
+  relationship the filter takes) is open.
+* Windows: test the viewer, the firmware installer and the telemetry port on real
+  Windows.
 
 ## Hard-won lessons
 
@@ -152,7 +161,7 @@ Open:
   `windows_build.md`.
 * LH2: `lh2_support.md` (pipeline, results, open items). Research: `lh1_as_lh2_research.md`.
 
-`firmware/` (lhbs): `usage.md` (build, flash, console), `FIRMWARE_OVERVIEW.md`,
+`firmware/` (lhbs): `usage.md` (build, flash, console; end users: `basestation_firmware/installer`), `FIRMWARE_OVERVIEW.md`,
 `HARDWARE.md` (pin map, peripherals, verification log), `MULTISTATION.md` (TDM slots,
 open issues).
 

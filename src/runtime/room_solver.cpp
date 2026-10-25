@@ -376,21 +376,6 @@ RoomSolveOutput SolveRoom(const RoomSolveInput& in) {
         }
       if (!fixed) { delete ordering; return std::make_pair(false, 0); }
     }
-    if (std::getenv("LH_DEBUG_SOLVER")) {
-      std::map<uint32_t, std::pair<double, int>> init;
-      for (size_t i = 0; i < kfs.size(); ++i) {
-        for (auto id : ids[i]) {
-          double cost = 0;
-          problem.EvaluateResidualBlock(id, false, &cost, nullptr, nullptr);
-          std::vector<double*> blocks;
-          problem.GetParameterBlocksForResidualBlock(id, &blocks);
-          for (auto& [base, b] : bases)
-            if (b.v == blocks[0]) { init[base].first += 2 * cost; ++init[base].second; }
-        }
-      }
-      for (auto& [base, v] : init)
-        fprintf(stderr, "initial rms %08X: %.0f urad over %d\n", base, std::sqrt(v.first / v.second) * kSigma * 1e6, v.second);
-    }
     ceres::Solver::Options options;
     options.linear_solver_type = ceres::DENSE_SCHUR;
     options.linear_solver_ordering.reset(ordering);
@@ -399,8 +384,6 @@ RoomSolveOutput SolveRoom(const RoomSolveInput& in) {
     options.function_tolerance = 1e-9;
     ceres::Solver::Summary summary;
     ceres::Solve(options, &problem, &summary);
-    if (std::getenv("LH_DEBUG_SOLVER")) fprintf(stderr, "%s\n", summary.BriefReport().c_str());
-    if (!summary.IsSolutionUsable() && std::getenv("LH_DEBUG_SOLVER")) fprintf(stderr, "%s\n", summary.message.c_str());
     if (kfRms) {
       kfRms->assign(kfs.size(), -1);
       for (size_t i = 0; i < kfs.size(); ++i) {
@@ -464,10 +447,14 @@ RoomSolveOutput SolveRoom(const RoomSolveInput& in) {
   // Per-base fit statistics.
   std::map<uint32_t, std::pair<double, int>> fit;
   std::map<uint32_t, int> samples, fresh;
+  std::map<uint32_t, std::map<std::string, std::pair<double, double>>> when;  // base -> device -> time range
   for (size_t i = 0; i < kfs.size(); ++i) {
     if (!use[i] || rms[i] < 0) continue;
     for (const auto& [base, s] : kfs[i].k->samples) {
       if (!bases.count(base)) continue;
+      auto [range, added] = when[base].try_emplace(kfs[i].k->device, kfs[i].k->time, kfs[i].k->time);
+      range->second.first = std::min(range->second.first, kfs[i].k->time);
+      range->second.second = std::max(range->second.second, kfs[i].k->time);
       fit[base].first += rms[i] * rms[i];
       ++fit[base].second;
       samples[base] += int(s.size());
@@ -479,6 +466,8 @@ RoomSolveOutput SolveRoom(const RoomSolveInput& in) {
   for (auto& [base, sb] : out.bases) {
     sb.keyframes = fit[base].second;
     sb.fresh = fresh[base];
+    sb.devices = int(when[base].size());
+    for (const auto& [device, range] : when[base]) sb.span = std::max(sb.span, range.second - range.first);
     sb.rms = sb.keyframes ? std::sqrt(fit[base].first / sb.keyframes) : 0;
     // The covariance takes every sample as independent at kSigma. They are not: the
     // samples of a keyframe share its device pose errors (the filter's motion over the

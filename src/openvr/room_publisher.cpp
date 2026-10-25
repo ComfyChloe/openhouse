@@ -64,17 +64,17 @@ void RoomPublisher::Close() {
 bool RoomPublisher::Open() {
 #ifdef __linux__
   if (shm_ || failed_) return shm_ != nullptr;
-  path_ = LHDRVRW_ROOM_PATH_PREFIX + std::to_string(unsigned(getuid()));
+  path_ = OPENHOUSE_ROOM_PATH_PREFIX + std::to_string(unsigned(getuid()));
   const int fd = shm_open(path_.c_str(), O_RDWR | O_CREAT, 0600);
   if (fd < 0) { failed_ = true; return false; }
-  void* m = ftruncate(fd, sizeof(lhdrvrw_room)) == 0
-                ? mmap(nullptr, sizeof(lhdrvrw_room), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0) : MAP_FAILED;
+  void* m = ftruncate(fd, sizeof(openhouse_room)) == 0
+                ? mmap(nullptr, sizeof(openhouse_room), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0) : MAP_FAILED;
   close(fd);
   if (m == MAP_FAILED) { failed_ = true; return false; }
-  shm_ = static_cast<lhdrvrw_room*>(m);
+  shm_ = static_cast<openhouse_room*>(m);
   std::memset(shm_, 0, sizeof *shm_);
-  shm_->magic = LHDRVRW_ROOM_MAGIC;
-  shm_->version = LHDRVRW_ROOM_VERSION;
+  shm_->magic = OPENHOUSE_ROOM_MAGIC;
+  shm_->version = OPENHOUSE_ROOM_VERSION;
   shm_->pid = int32_t(getpid());
   return true;
 #else
@@ -93,6 +93,31 @@ void RoomPublisher::Publish(const SessionSnapshot& snapshot, const Eigen::Isomet
                      b.origin ? 0.0 : std::sqrt(std::max(b.positionVariance, 0.0))});
   }
   const bool settled = settle_.Update(bases, now);
+  settled_ = settled;
+  {
+    // Logged on a change only: settled or not, and which bases hold it back.
+    std::string key = settled ? "settled" : "settling";
+    std::string text = std::string("room ") + (settled ? "settled" : "not settled");
+    std::string ok, waiting;
+    for (const auto& b : bases) {
+      if (!b.visible) continue;
+      const bool good = b.placed && b.sigma <= RoomSettle::kMaxSigma;
+      key += "|" + b.serial + (good ? "+" : "-");
+      char item[96];
+      if (good) std::snprintf(item, sizeof item, " %s (%.1f mm)", b.serial.c_str(), b.sigma * 1000);
+      else if (!b.placed) std::snprintf(item, sizeof item, " %s (not placed)", b.serial.c_str());
+      else std::snprintf(item, sizeof item, " %s (%.1f mm, needs %.0f)", b.serial.c_str(), b.sigma * 1000, RoomSettle::kMaxSigma * 1000);
+      (good ? ok : waiting) += item;
+    }
+    if (key != lastLogKey_) {
+      lastLogKey_ = key;
+      text += ": placed" + (ok.empty() ? std::string(" none") : ok);
+      if (!waiting.empty()) text += "; waiting for" + waiting;
+      char e[48];
+      std::snprintf(e, sizeof e, " (epoch %llu)", static_cast<unsigned long long>(settle_.epoch()));
+      pendingLog_ = text + e;
+    }
+  }
 #ifdef __linux__
   if (!Open()) return;
   auto* seq = reinterpret_cast<volatile uint32_t*>(&shm_->seq);
@@ -105,7 +130,7 @@ void RoomPublisher::Publish(const SessionSnapshot& snapshot, const Eigen::Isomet
   shm_->settled = settled;
   std::snprintf(shm_->room, sizeof shm_->room, "%s", snapshot.roomId.c_str());
   int n = 0;
-  for (size_t i = 0; i < bases.size() && n < LHDRVRW_ROOM_MAX_BASES; ++i) {
+  for (size_t i = 0; i < bases.size() && n < OPENHOUSE_ROOM_MAX_BASES; ++i) {
     const auto& b = bases[i];
     auto& out = shm_->bases[n++];
     std::memset(&out, 0, sizeof out);

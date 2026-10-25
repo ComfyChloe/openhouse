@@ -7,6 +7,8 @@
 #include <vector>
 
 #include "lh/room_shm.h"
+#include <set>
+
 #include "lh/session.hpp"
 
 namespace lh::openvr {
@@ -44,10 +46,18 @@ class RoomPublisher {
   void Close();  // readers fall back to their usual route
   void Publish(const SessionSnapshot& snapshot, const Eigen::Isometry3d& rawFromWorld, double now);
 
+  // A line for the driver log when the room's settled state or set of placed bases
+  // changed (empty otherwise).
+  std::string TakeLog() { std::string out; out.swap(pendingLog_); return out; }
+  bool Settled() const { return settled_; }
+  unsigned long long Epoch() const { return settle_.epoch(); }
+
  private:
   bool Open();
   RoomSettle settle_;
-  lhdrvrw_room* shm_ = nullptr;
+  std::string lastLogKey_, pendingLog_;
+  bool settled_ = false;
+  openhouse_room* shm_ = nullptr;
   bool failed_ = false;
   std::string path_;
 };

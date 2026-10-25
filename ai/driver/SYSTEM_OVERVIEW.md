@@ -1,4 +1,4 @@
-# lhdrvrw: the custom Lighthouse driver, end to end
+# openhouse: the custom Lighthouse driver, end to end
 
 The "how does the whole thing work" document. The deeper references are:
 - `ARCHITECTURE.md`: the reverse-engineered stock driver.
@@ -11,17 +11,19 @@ The "how does the whole thing work" document. The deeper references are:
 
 ## 1. What it is
 
-A reimplementation of SteamVR's `driver_lighthouse` for **Lighthouse 1.0** tracking
-of Index controllers and trackers. It's built as:
+A reimplementation of SteamVR's `driver_lighthouse` for **Lighthouse 1.0 and 2.0**
+tracking of headsets, Index controllers and trackers. It's built as:
 - **`liblh`**, a C++ library. The tracking core is a verified port of Valve's filter,
   and the runtime improves on it.
 - **`driver_lighthouse.so` / `.dll`**, an OpenVR driver on top of `liblh`. It's a
   drop-in for SteamVR and for Monado's `steamvr_lh` (WiVRn, xrizer, VRChat).
-- **Tools:** `lhtool`, `lhviz`, `lhcapture`, `lhhaptics`, `lhidentify`, on the same
-  library.
+- **Tools:** `openhouse-viewer` (live status of the running driver), `lhtool`, `lhviz`,
+  `lhcapture`, `lhhaptics`, `lhidentify`.
 
-The HMD is deliberately not exposed: Monado/WiVRn track the headset. Base stations
-are exposed as tracking references. Lighthouse 2.0 is out of scope.
+Headsets are tracked by openhouse; their display comes from SteamVR's stock driver,
+loaded at runtime for the headset only (`stock_hmd.cpp`). Base stations are exposed as
+tracking references. Lighthouse 2.0: `lh2_support.md`. The human-facing description of
+all of this is the root `README.md`.
 
 ```
  USB HID (Watchman dongles / wired)                     src/transport/usb
@@ -101,8 +103,8 @@ model (`lighthouse_model.hpp`).
 3. **Tracking:** health checks reset it on nonsense (out of bounds, misalignment,
    spinning faster than possible). It reacquires with the calibration carried over.
 
-**Non-stock improvements** are switchable for A/B tests; `LH_STOCK_FILTER` turns them
-all off. Details and numbers are in `tracking_improvements.md`.
+**Non-stock improvements:** `LH_STOCK_FILTER` turns them all off (the per-change
+switches were removed for the release). Details and numbers are in `tracking_improvements.md`.
 
 | Improvement | What it does |
 |---|---|
@@ -111,7 +113,7 @@ all off. Details and numbers are in `tracking_improvements.md`.
 | Room sync | Other bases' poses come from the room solve when the filter is clearly off. Pairs with the origin are synced only once the room is sure of them |
 | Rejection-streak handling | A base whose light keeps being rejected gets the room's relationship, or the device reacquires on it |
 | Knocked bases | While a base relearns, the device loosens its prior on it. An oversized correction then moves only that base, within the per-update limits, for 10 s |
-| Violent motion (`LH_NO_SWING`) | On saturated or near-limit IMU samples, the slow states are held (base tilt and gravity, IMU calibration, other bases), so the light corrects only the motion. A saturated axis counts as an "at least this much" bound. Frames of fewer than 3 sensor rows are rejected meanwhile |
+| Violent motion | On saturated or near-limit IMU samples, the slow states are held (base tilt and gravity, IMU calibration, other bases), so the light corrects only the motion. A saturated axis counts as an "at least this much" bound. Frames of fewer than 3 sensor rows are rejected meanwhile |
 | Primary switching (multi rooms) | A primary base dark for 0.5 s while another is lit: start over on the lit one |
 
 ## 5. The room (`RoomMap`, `RoomSolver`, `Session`)
@@ -132,8 +134,12 @@ all off. Details and numbers are in `tracking_improvements.md`.
 - **Knocks:** lhbs bases refresh their accelerometer in OOTX. A turn of more than 1.2°,
   seen twice, relearns the base. A knocked origin is re-solved against the best other
   base, and the host frame follows it (see below).
-- **Level:** the origin's tilt is refined from the devices' gravity. Large accelerometer
-  disagreements re-level the room.
+- **Locks:** a base with 100+ keyframes of evidence (this session or saved) is locked:
+  no solve, observation or wake-up moves it; only its own accelerometer (a knock, or a
+  gravity that differs from the saved one) unlocks it.
+- **Level:** the origin's tilt is refined from the devices' gravity. An origin turned
+  more than 8 deg since the room was saved makes the stored room stale: a new room is
+  learned (the old one is kept, unused).
 
 ## 6. The OpenVR driver (`src/openvr`)
 
@@ -158,7 +164,7 @@ all off. Details and numbers are in `tracking_improvements.md`.
     - A knocked origin that the room re-placed moves the anchor with it.
   - `LH_HOST_FRAME=steamvr`: align to SteamVR's universe through a shared base
     (`RawAlignment`), as the original did.
-- **RoomPublisher:** shared memory `/lhdrvrw-room-<uid>` (Linux; layout in
+- **RoomPublisher:** shared memory `/openhouse-room-<uid>` (Linux; layout in
   `include/lh/room_shm.h`). It carries every base's pose in the host frame, with
   σ and an origin flag, a *settled* flag (no base moving, all σ < 5 mm) and an *epoch*
   that changes when the settled room differs. alignment tools prefers it over the runtime's
@@ -168,26 +174,22 @@ all off. Details and numbers are in `tracking_improvements.md`.
   glides between buttons; the skeleton is sent periodically, not only with input
   reports, so Monado doesn't extrapolate a stale hand.
 
-## 7. Files and switches
+## 7. Files, switches, logs
 
 | File | What |
 |---|---|
 | `~/.config/lh/roommap.json` | Rooms and base poses |
 | `~/.config/lh/hostframe.json` | Host frame anchors per room. Delete to re-anchor |
-| `~/.config/lh/settings.json` | Controller serials per hand |
-| `LH_CAPTURE=<dir>` | Record the live session for replays |
+| `~/.config/lh/settings.json` | `roles`, `controllers`, `disabledDevices` |
+| `~/.config/lh/viewer.json` | openhouse-viewer settings |
 
-| Switch | Effect |
-|---|---|
-| `LH_STOCK_FILTER` | Every non-stock tracking change off |
-| `LH_NO_PREDICT`, `LH_NO_SMOOTH`, `LH_NO_HOLD`, `LH_NO_SWING`, `LH_GATE_SIGMA=` | Individual A/B switches |
-| `LH_HOST_FRAME=steamvr` | Align to SteamVR's universe |
-| `LH_STEAM_DB=auto` or a path | Import SteamVR's base poses |
-| `LH_DEBUG_VIS` | Per-frame visibility, use and rejection |
-| `LH_DEBUG_REJECT` | Why the filter rejected an update |
-| `LH_DEBUG_SOLVER` | Room solves |
-| `LH_DEBUG_MULTI` | Multi-station layout |
-| `LH_DEBUG_BUMP=SERIAL:SEC:DEG` | Simulate a knock |
+Every environment variable is listed in the root `README.md`. For development: `LH_STOCK_FILTER`
+(stock tracking), `LH_REPLAY`, `LH_EVALUATE_ROOM`, `LH_CAPTURE`.
+
+Logs: every event has a level (`include/lh/log_level.hpp`; `ClassifyLog` when the
+emitter doesn't say). The host log gets INFO+ (`LH_LOG_LEVEL` lowers it); the viewer gets
+everything over the telemetry socket (`include/lh/telemetry.hpp`, 127.0.0.1:36840).
+Diagnostics are DEBUG messages, not stderr prints.
 
 ## 8. Tools
 
@@ -195,7 +197,8 @@ all off. Details and numbers are in `tracking_improvements.md`.
 |---|---|
 | `lhtool session <capture.lhraw> --room R.json [--trace T.jsonl]` | Replay a capture through the whole runtime: events, poses, a 100 Hz trace |
 | `tools/eval_replay.sh <capture> OUT 50 8` | Score a change: valid %, coasting, spikes, jitter, per device |
-| `lhviz` | Live 3D view: devices, bases (with channel and σ), events |
+| `openhouse-viewer` | Live status of the running driver: devices, bases, room, 3D view, log by level |
+| `lhviz` | Developer 3D view running its own tracking (SteamVR closed) |
 | `lhcapture [dir]`, `lhcapture --check` | Record raw data; check the sync-flash layout live |
 | `lhhaptics`, `lhidentify` | Haptics test; identify a device |
 
@@ -215,7 +218,8 @@ all off. Details and numbers are in `tracking_improvements.md`.
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build -j16
 ctest --test-dir build -j8          # unit, oracle (bit-exact vs stock), runtime, openvr
 scripts/steamvr-driver.sh install   # stops nothing: close SteamVR / Monado / WiVRn first
-scripts/build-windows.sh            # MinGW cross build -> dist/lh-windows-x64.zip
+scripts/build-windows.sh            # MinGW cross build -> dist/openhouse-windows-x64.zip
+python3 scripts/package-firmware.py # lhbs + installers -> dist/openhouse-basestation-firmware.zip
 ```
 
 On Windows: extract the zip, then

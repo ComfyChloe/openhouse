@@ -88,7 +88,7 @@ usable frames on the session. The output stage predicts to now itself, so the fi
 now waits up to 120 ms: dropped frames 2142 -> 76 (first 300 s), time coasting 1.1 %
 -> 0.5 %, one tracker's 2.1 % -> 0.0 %.
 
-Measured too (LH_DEBUG_VIS, per-frame visibility): lost with light split across both
+Measured too (with a per-frame visibility print, since removed): lost with light split across both
 bases but enough on neither (where a joint two-base bootstrap would help) was 1.8 s
 of 2154 device-seconds; not worth building yet.
 
@@ -132,7 +132,7 @@ of 2154 device-seconds; not worth building yet.
 * Pairs with the origin are synced into the device filters only once the room is sure
   (< 5 mm), or when a filter keeps rejecting the light. Syncing onto still-converging
   solves left vrchat-01 at 5-10 % rejected light for minutes (0 % at HEAD and now).
-* Simulated (LH_DEBUG_BUMP=SERIAL:SEC:DEG, a rigid turn about the base's y axis) on
+* Simulated (a since-removed debug switch turned a base rigidly about its y axis) on
   vrchat-01, 1.5 deg at 120 s: E236DC40 5 % of light rejected for 20 s, then 0 %; the
   origin A101B835 14 % for 20 s, 4 % the next 20 s, then 0 %. Both through refinement
   and the filters' rejection path; a stock base's 1.5 deg turn stays under the move
@@ -151,7 +151,7 @@ was nudged; its rooms are imported only with `LH_STEAM_DB=auto` (or a path).
 `LH_HOST_FRAME=steamvr` restores the old frame: the anchor base exactly where
 lighthousedb.json has it (`RawAlignment`).
 
-The room is published in shared memory (`/dev/shm/lhdrvrw-room-<uid>`,
+The room is published in shared memory (`/dev/shm/openhouse-room-<uid>`,
 `include/lh/room_shm.h`): every base's pose in the host frame, whether the room has
 settled (no base moved more than 5 mm / 0.15 deg for 3 s, every visible base under 5 mm
 uncertainty) and an epoch that changes when a settled room differs from the last by
@@ -165,10 +165,10 @@ the room solver is the next thing to steady.
 
 ## A/B switches (environment)
 
-`LH_STOCK_FILTER` (all of the above off except the room), `LH_NO_PREDICT`,
-`LH_NO_SMOOTH`, `LH_NO_HOLD`, `LH_NO_SWING`, `LH_GATE_SIGMA=<sigma>` (0 off). Diagnostics:
-`LH_DEBUG_BOOTSTRAP` (why acquisition fails), `LH_DEBUG_RESID` (per-sensor residuals
-of near misses), `LH_DEBUG_MS` / `LH_DEBUG_MS_TIME` (multi-start), `LH_DEBUG_STILL`.
+`LH_STOCK_FILTER` turns off all of the above except the room. The individual switches
+and the stderr diagnostics were removed for the release (2026-10-25); to A/B one change,
+add a temporary switch locally and remove it again. Diagnostics now go to the log at
+DEBUG level (`LH_LOG_LEVEL=DEBUG`, or the viewer's DEBUG box).
 
 ## Evaluating a change
 
@@ -219,8 +219,8 @@ altRot, gravTilt), the IMU misalignment run off to 15-19 deg, tracking lost and 
 
 testswing from the driver's room (old -> new): tracking 86.9 -> 90.6 %, valid 97.5 ->
 99.5 %, lost 4 -> 0, output jumps > 5 cm 142 -> 53, > 15 cm 7 -> 3, the light used 42
--> 82 %. vrchat-01, controller-moving-hidden, the oracle tests: unchanged. Off:
-LH_NO_SWING (and LH_STOCK_FILTER); off by default in LighthouseDirect (SetImprovements).
+-> 82 %. vrchat-01, controller-moving-hidden, the oracle tests: unchanged. Off with
+LH_STOCK_FILTER; off by default in LighthouseDirect (SetImprovements).
 
 ## Beat Saber fly-aways (2026-10-22)
 
@@ -235,16 +235,14 @@ Fast Beat Saber play on the 4-base lhbs room threw controllers metres out of the
   A101B835 9.5 % of its sweeps, 89AE90F2 4.8 %, D7B1AD76 1.5 %, the master E236DC40
   never. Horizontal angles read as vertical (0.33 rad off) threw the pose 0.7-1.8 m.
   `MultiDisambiguator` now drops a sweep whose axis breaks the station's 0 -> 1 order
-  (logged as "swept axis N out of sequence"; `LH_DEBUG_AXIS=1` prints each with its sync
-  width). The firmware cause is open: `ai/firmware/MULTISTATION.md`.
+  (logged as "swept axis N out of sequence"). The firmware cause is open: `ai/firmware/MULTISTATION.md`.
 * **Whole frames far off the prediction.** The row gate stands aside when most rows are
   out, so such a frame (40-90 cm away, mostly single-axis, often an alternate base) was
   applied in full and the filter followed the wrong track. `DirectFilter::Update` rejects
   a frame with most rows beyond the gate whose correction would move the position more
   than 10 cm, once settled (200 updates since bootstrap/reacquire), at most 6 in a row.
   It acts in violent motion too (nothing separated bad light from real corrections
-  there). Off: `LH_NO_FRAME_GATE=1`; `LH_DEBUG_UPDATE[=all]` logs large updates and
-  rejections. Tried and dropped: a sigma gate (> 100) doubled vrchat-01's coasting
+  there). Tried and dropped: a sigma gate (> 100) doubled vrchat-01's coasting
   (still devices have a tiny predicted spread); skipping violent motion let a mid-game
   fly-away in `-01-3` back.
 
@@ -272,7 +270,7 @@ the old path:
   the tangent space to 1e-15.
 * Solve backoff: after a solve that moved no base > 3 mm / 0.15 deg since the previous
   solve, the interval doubles up to 4 s (1 s on any change, 0.1 s while a base is being
-  located). `LH_DEBUG_SOLVER` logs the movement.
+  located). The movement is logged at DEBUG level.
 * `platform::SleepFor`: Windows `sleep_for` rounds to the 15.6 ms timer tick (measured
   15.4 ms for 500 us), which held the driver loop and USB reads to ~64 passes/s; a
   high-resolution waitable timer sleeps ~1 ms.

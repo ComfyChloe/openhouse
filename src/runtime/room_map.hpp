@@ -31,6 +31,7 @@ struct RoomBase {
   double positionVariance = 0;  // m^2, trace
   double rotationVariance = 0;  // rad^2, trace
   int observations = 0;           // keyframes of evidence behind the pose (room solver)
+  int storedObservations = 0;     // as loaded: earlier sessions' evidence, kept through Suspect
   bool origin = false;
   std::optional<int> resetCount;  // OOTX sys_unlock_count when located
   int inconsistent = 0;           // consecutive observations disagreeing with the map
@@ -72,6 +73,9 @@ class RoomMap {
   const RoomBase* Base(uint32_t serial) const;
   std::vector<RoomBase> Bases() const;
   bool Empty() const;
+  // Locked: placed well (100+ keyframes, this session or saved), and not bumped. Only
+  // the base's own accelerometer (a bump) unlocks it; the light never moves it again.
+  static bool Locked(const RoomBase& base);
   const Room* Active() const { return active_ < 0 ? nullptr : &rooms_[size_t(active_)]; }
   uint64_t Revision() const { return revision_; }
   bool Dirty() const { return dirty_; }
@@ -88,7 +92,8 @@ class RoomMap {
   // (new since the last solve; < 0: all of them) and moves the base by that share. A solve far
   // outside both uncertainties three times running is a moved base: taken whole.
   void ApplySolved(uint32_t serial, const Eigen::Isometry3d& worldFromBase, double positionVariance,
-                   double rotationVariance, int keyframes, double rms, int fresh = -1);
+                   double rotationVariance, int keyframes, double rms, int fresh = -1, int devices = 2,
+                   double span = 1e9);
   // A better tilt for the origin base (e.g. after a device calibrated on it):
   // re-levels the whole room once the variance is clearly lower.
   // Moves bases toward their latest room-solver poses, rate-limited (session time).
@@ -122,7 +127,7 @@ class RoomMap {
   // accelerometer if the stored level disagrees, the others relearned if it was reset
   bool LevelOrigin(Room& room, RoomBase& origin, const BaseDynamicState& dynamic);  // true: room stale
   static void Suspect(RoomBase& base);
-  void CheckAccel(uint32_t serial, const BaseDynamicState& dynamic);
+  void CheckAccel(uint32_t serial, const BaseDynamicState& dynamic, const Eigen::Vector3d* saved = nullptr);
   void Changed() { ++revision_; dirty_ = true; if (auto* r = ActiveRoom()) r->updated = Now(); }
   static double Now();
 

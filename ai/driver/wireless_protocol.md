@@ -17,8 +17,8 @@ Wv2 (5644 packets), legacy v0 (5618 packets) from an Index controller.
   supported. (The dongle needs a few ms; retry until len ≠ 0.)
 - If supported (pid 2101/2102): send feature `ff 87 03 00 <u16 version=1>` and enter
   "pending" (version 2): drop all packets until one has `[1]=3, [3]=0xe2` → version = `[4]`.
-  Requesting 0 forces the legacy protocol (used for regression captures:
-  `LH_WIRELESS_PROTOCOL=0 lhtool capture …`).
+  Requesting 0 forces the legacy protocol (the driver always requests 1 now; the
+  old override for legacy captures was removed).
 - Version 0 → legacy decoder, 1 → Wv2 decoder.
 
 ## Legacy (v0) payload (0x3fdec0)

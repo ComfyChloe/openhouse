@@ -9,7 +9,9 @@
 namespace lh::runtime {
 
 // hmd -> Hmd; controller whose model/render model/input profile names an Index
-// ("Knuckles") controller -> Controller; everything else -> Tracker.
+// ("Knuckles") controller or a Vive wand -> Controller; everything else -> Tracker.
 DeviceRole RoleFromConfig(const std::string& configJson);
+// Index or Vive wand, for a config RoleFromConfig makes a Controller.
+ControllerType ControllerTypeFromConfig(const std::string& configJson);
 
 }  // namespace lh::runtime

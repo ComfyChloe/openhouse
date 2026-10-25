@@ -1,4 +1,5 @@
 // End-to-end replay smoke test, NOT a ground-truth pose comparison.
+#include "common/test_paths.hpp"
 #include <gtest/gtest.h>
 #include <filesystem>
 #include <cmath>
@@ -9,7 +10,7 @@
 #include "usb_transport.hpp"
 
 TEST(TrackingReplay, ProducesFinitePosesWithoutSteamVRRuntime) {
-  const auto path = std::string(LH_SOURCE_DIR) + "/captures/controller_static_10s.lhraw";
+  const auto path = TestCapture("controller_static_10s.lhraw");
   if (!std::filesystem::exists(path)) GTEST_SKIP() << "no capture fixture";
   lh::Tracker tracker, world;
   lh::RigidPose placement;

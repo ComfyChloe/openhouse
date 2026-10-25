@@ -216,38 +216,14 @@ solver::Result SolveBootstrap(const TrackedObjectModel& model, const BaseConfig&
 }
 }  // namespace
 
-namespace {
-// LH_DEBUG_BOOTSTRAP: why acquisition isn't happening, tallied (stderr, every 5 s).
-struct BootstrapTally {
-  int frames = 0, noSelect = 0, attempts = 0, notConverged = 0, outOfRange = 0, ok = 0;
-  int multiStarts = 0, multiOk = 0, ambiguous = 0;
-  size_t samples = 0, selected = 0;
-  double since = -1;
-  void Report(double t, const void* who) {
-    if (since < 0) since = t;
-    if (t - since < 5) return;
-    std::fprintf(stderr, "bootstrap %p: %d frames (%.1f samples), %d no bracket, %d solves (%.1f samples): %d not converged, %d out of range, %d ok; multi-start %d: %d ok, %d ambiguous\n",
-                 who, frames, frames ? double(samples) / frames : 0.0, noSelect, attempts, attempts ? double(selected) / attempts : 0.0,
-                 notConverged, outOfRange, ok, multiStarts, multiOk, ambiguous);
-    *this = {};
-    since = t;
-  }
-};
-}  // namespace
-
 bool LighthouseDirect::Bootstrap(const OpticalFrame& frame, const BaseConfig& base) {
-  static const bool debug = std::getenv("LH_DEBUG_BOOTSTRAP") != nullptr;
-  static thread_local std::map<const void*, BootstrapTally> tallies;
-  BootstrapTally* tally = debug && !slots_[0] ? &tallies[this] : nullptr;
-  if (tally) { ++tally->frames; tally->samples += frame.samples.size(); tally->Report(frame.syncTime, this); }
   OpticalFrame f = frame;
   f.samples = Gather(frame.samples);
   auto& history = history_[frame.baseSerial];
   history.Append(std::move(f));
   std::vector<OpticalSample> older, newer;
-  if (!history.Select(&older, &newer)) { if (tally) ++tally->noSelect; return false; }
+  if (!history.Select(&older, &newer)) return false;
   ++bootstrapAttempts_;
-  if (tally) { ++tally->attempts; tally->selected += newer.size(); }
   const double time = newer.front().time + newer.front().width * 0.5;
   if (slots_[0] && CanSwitchPrimary(base.serial)) {
     if (!PredictTo(time)) return false;
@@ -283,7 +259,6 @@ bool LighthouseDirect::Bootstrap(const OpticalFrame& frame, const BaseConfig& ba
       bool ambiguous = false;
       std::vector<int> dropped;
       const auto retry = solver::SolveMultiStart(model_, base, newer, &ambiguous, &dropped);
-      if (tally) { ++tally->multiStarts; tally->multiOk += retry.status == 0 && !ambiguous; tally->ambiguous += ambiguous; }
       if (retry.status == 0 && !ambiguous) {
         solved = retry;
         wait = 0.25;
@@ -301,11 +276,9 @@ bool LighthouseDirect::Bootstrap(const OpticalFrame& frame, const BaseConfig& ba
   if (solved.status != 0 || !std::isfinite(solved.cost) ||
       !std::all_of(solved.pose.p.begin(), solved.pose.p.end(), [](double v) { return std::isfinite(v); }) ||
       !std::all_of(solved.pose.q.begin(), solved.pose.q.end(), [](double v) { return std::isfinite(v); })) {
-    if (tally) ++tally->notConverged;
     return false;
   }
-  if (!slots_[0] && !BootstrapPoseInRange(solved.pose)) { if (tally) ++tally->outOfRange; return false; }
-  if (tally) ++tally->ok;
+  if (!slots_[0] && !BootstrapPoseInRange(solved.pose)) return false;
   if (slots_[0]) {
     // The original only adds an alternate base via 0x35c330, which requires
     // updateCount > 0x104 (260) and a LighthouseDB sanction. Without the gate the
@@ -450,23 +423,7 @@ bool LighthouseDirect::ApplyOpticalResiduals(const OpticalFrame& frame, const Ba
     R(i, i) = variance + grazing * grazing;
   }
   R(m - 1, m - 1) = 1e-8;
-  const Eigen::Vector3d before3(filter_.xLin[0], filter_.xLin[1], filter_.xLin[2]);
   if (!filter_.Update(residuals, R, Eigen::Map<Vec>(z.data(), m), true)) return false;
-  if (static const bool debugUpdate = std::getenv("LH_DEBUG_UPDATE") != nullptr; debugUpdate) {
-    const double moved = (Eigen::Vector3d(filter_.x[0], filter_.x[1], filter_.x[2]) - before3).norm();
-    static const bool all = std::string(std::getenv("LH_DEBUG_UPDATE")) == "all";
-    if (moved > 0.05 || all) {
-      std::string list;
-      for (const auto& s : samples) {
-        char item[48];
-        std::snprintf(item, sizeof item, " s%d/a%d=%.4f", s.sensor, s.axis, s.angle);
-        list += item;
-      }
-      fprintf(stderr, "UPDATE t=%.6f base %08X slot %d hits %d moved %.1f cm, outliers %d worst %.1f sigma (gate %.1f) held %d:%s\n",
-              time, frame.baseSerial, slot, hits, moved * 100, filter_.lastOutliers, filter_.lastWorstSigma,
-              filter_.gateSigma, int(filter_.holdSlowStates), list.c_str());
-    }
-  }
   time_ = time;
   const uint64_t before = filter_.updateCount;
   if (hits >= 4) ++filter_.updateCount;

@@ -56,7 +56,7 @@ struct Lh2SensorWord {
 enum class DeviceEventType : int {
   PulseWidthUnknown = 3,      // width field 0xffff
   ImuReportComplete = 0xb,
-  Lh2ChannelConflict = 0xe,   // "Saw sync on beam channel conflict on ch %d"
+  Lh2ChannelConflict = 0xe,   // "two bases share light channel %d"
   SyncPulseSeen = 0xf,        // pulse with LH1 sync-like width
 };
 

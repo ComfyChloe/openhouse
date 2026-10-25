@@ -72,7 +72,7 @@ only with locked rotors) must stay in front of any modulation path.
   if so, they are the main gain. An LH1 and an LH2-style base
   in one room may confuse device modes: Bitcraze notes V1 and V2 can't be mixed, and how
   Valve's devices behave with both is unknown. Plan for all-LH2-style rooms.
-* lhdrvrw: today it reads LH1 pulses only. It would need the LH2 light reports from the
+* openhouse: today it reads LH1 pulses only. It would need the LH2 light reports from the
   USB/radio layer, LFSR decoding (port libsurvive's `lfsr_lh2.c`), and the LH1-geometry
   model fed by LH2 angles.
 

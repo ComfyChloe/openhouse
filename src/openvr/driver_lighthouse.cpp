@@ -50,11 +50,18 @@ constexpr const char* kStockFile = "driver_lighthouse.so.stock";
 #include "hand_skeleton.hpp"
 #include "raw_alignment.hpp"
 #include "room_publisher.hpp"
+#include "telemetry_server.hpp"
+#include "lh/log_level.hpp"
+#include "lh/telemetry.hpp"
 #include "host_frame.hpp"
 #include "haptic_routing.hpp"
 #include <set>
 #include "platform/platform.hpp"
 #include <filesystem>
+#include <fstream>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #include <deque>
 
 namespace {
@@ -116,8 +123,30 @@ class Recorder {
 };
 Recorder g_recorder;
 
-void Log(const std::string& text) {
-  if (VRDriverLog()) VRDriverLog()->Log(("lh: " + text + "\n").c_str());
+// Every message goes to the viewers (they filter for themselves); the host's log gets
+// Info and up unless LH_LOG_LEVEL says otherwise.
+lh::openvr::TelemetryServer g_telemetry;
+const lh::LogLevel g_logLevel = lh::MinimumLogLevelFromEnvironment();
+
+void Log(lh::LogLevel level, const std::string& text, const std::string& serial = {}, double time = SteadyNow()) {
+  g_telemetry.Log(time, level, serial, text);
+  if (level >= g_logLevel && VRDriverLog())
+    VRDriverLog()->Log(("lh: [" + std::string(lh::LogLevelName(level)) + "] " + text + "\n").c_str());
+}
+void Log(const std::string& text) { Log(lh::ClassifyLog(text), text); }
+
+// The process hosting the driver (vrserver, monado-service, wivrn-server, ...).
+std::string HostName() {
+#ifdef _WIN32
+  char path[MAX_PATH]{};
+  GetModuleFileNameA(nullptr, path, MAX_PATH);
+  return std::filesystem::path(path).stem().string();
+#else
+  std::ifstream comm("/proc/self/comm");
+  std::string name;
+  std::getline(comm, name);
+  return name;
+#endif
 }
 
 uint64_t UniverseId(const std::string& roomId) {
@@ -143,6 +172,7 @@ struct DeviceStatic {
   std::string serial, model, manufacturer, renderModel, controllerRole;
   lh::DeviceRole role = lh::DeviceRole::Tracker;
   std::string baseChannel;  // base stations: "A" "b" "c", lhbs multi "1".."4"
+  lh::ControllerType controllerType = lh::ControllerType::Index;
 };
 
 class Device : public ITrackedDeviceServerDriver {
@@ -362,6 +392,37 @@ class Device : public ITrackedDeviceServerDriver {
     switch (info_.role) {
       case lh::DeviceRole::Controller: {
         const bool left = info_.controllerRole == "left_hand";
+        if (info_.controllerType == lh::ControllerType::ViveWand) {
+          // As SteamVR's own wand: the htc resources (profile, render model, icons).
+          props->SetStringProperty(c, Prop_ManufacturerName_String, info_.manufacturer.empty() ? "HTC" : info_.manufacturer.c_str());
+          props->SetStringProperty(c, Prop_ModelNumber_String, info_.model.empty() ? "Vive. Controller MV" : info_.model.c_str());
+          props->SetStringProperty(c, Prop_ResourceRoot_String, "htc");
+          props->SetStringProperty(c, Prop_ControllerType_String, "vive_controller");
+          props->SetStringProperty(c, Prop_InputProfilePath_String, "{htc}/input/vive_controller_profile.json");
+          props->SetStringProperty(c, Prop_RenderModelName_String,
+                                   info_.renderModel.empty() ? "vr_controller_vive_1_5" : info_.renderModel.c_str());
+          props->SetStringProperty(c, Prop_RegisteredDeviceType_String, ("htc/vive_controller" + info_.serial).c_str());
+          props->SetInt32Property(c, Prop_ControllerRoleHint_Int32,
+                                  left ? TrackedControllerRole_LeftHand
+                                       : info_.controllerRole == "right_hand" ? TrackedControllerRole_RightHand
+                                                                              : TrackedControllerRole_Invalid);
+          props->SetInt32Property(c, Prop_DeviceClass_Int32, TrackedDeviceClass_Controller);
+          props->SetInt32Property(c, Prop_ControllerHandSelectionPriority_Int32, NextHandPriority());
+          lastUse_ = std::chrono::steady_clock::now();
+          props->SetInt32Property(c, Prop_Axis0Type_Int32, k_eControllerAxis_TrackPad);
+          props->SetInt32Property(c, Prop_Axis1Type_Int32, k_eControllerAxis_Trigger);
+          props->SetBoolProperty(c, Prop_DeviceProvidesBatteryStatus_Bool, true);
+          props->SetBoolProperty(c, Prop_Identifiable_Bool, true);
+          props->SetStringProperty(c, Prop_NamedIconPathDeviceOff_String, "{htc}/icons/controller_status_off.png");
+          props->SetStringProperty(c, Prop_NamedIconPathDeviceSearching_String, "{htc}/icons/controller_status_searching.gif");
+          props->SetStringProperty(c, Prop_NamedIconPathDeviceSearchingAlert_String, "{htc}/icons/controller_status_searching_alert.gif");
+          props->SetStringProperty(c, Prop_NamedIconPathDeviceReady_String, "{htc}/icons/controller_status_ready.png");
+          props->SetStringProperty(c, Prop_NamedIconPathDeviceReadyAlert_String, "{htc}/icons/controller_status_ready_alert.png");
+          props->SetStringProperty(c, Prop_NamedIconPathDeviceNotReady_String, "{htc}/icons/controller_status_error.png");
+          props->SetStringProperty(c, Prop_NamedIconPathDeviceStandby_String, "{htc}/icons/controller_status_standby.png");
+          props->SetStringProperty(c, Prop_NamedIconPathDeviceAlertLow_String, "{htc}/icons/controller_status_ready_low.png");
+          break;
+        }
         props->SetStringProperty(c, Prop_ManufacturerName_String, info_.manufacturer.empty() ? "Valve" : info_.manufacturer.c_str());
         props->SetStringProperty(c, Prop_ModelNumber_String, info_.model.c_str());
         props->SetStringProperty(c, Prop_ResourceRoot_String, "indexcontroller");
@@ -448,7 +509,7 @@ class Device : public ITrackedDeviceServerDriver {
   enum Input {
     SystemClick, SystemTouch, AClick, ATouch, BClick, BTouch, TriggerClick, TriggerTouch, TriggerValue,
     GripTouch, GripValue, GripForce, StickClick, StickTouch, StickX, StickY, PadTouch, PadX, PadY, PadForce,
-    FingerIndex, FingerMiddle, FingerRing, FingerPinky, InputCount
+    FingerIndex, FingerMiddle, FingerRing, FingerPinky, PadClick, GripClick, MenuClick, InputCount
   };
 
   void CreateInputs() {
@@ -470,6 +531,21 @@ class Device : public ITrackedDeviceServerDriver {
     auto s2 = [&](Input i, const char* path) {
       created(i, path, in->CreateScalarComponent(c, path, &handles_[i], VRScalarType_Absolute, VRScalarUnits_NormalizedTwoSided));
     };
+    if (info_.controllerType == lh::ControllerType::ViveWand) {
+      // The wand's components, as vive_controller_profile.json names them. No skeleton:
+      // SteamVR estimates the hand from the buttons.
+      b(SystemClick, "/input/system/click");
+      b(MenuClick, "/input/application_menu/click");
+      b(GripClick, "/input/grip/click");
+      b(TriggerClick, "/input/trigger/click");
+      s1(TriggerValue, "/input/trigger/value");
+      b(PadClick, "/input/trackpad/click");
+      b(PadTouch, "/input/trackpad/touch");
+      s2(PadX, "/input/trackpad/x");
+      s2(PadY, "/input/trackpad/y");
+      in->CreateHapticComponent(c, "/output/haptic", &haptic_);
+      return;
+    }
     b(SystemClick, "/input/system/click");
     b(SystemTouch, "/input/system/touch");
     b(AClick, "/input/a/click");
@@ -546,7 +622,8 @@ class Device : public ITrackedDeviceServerDriver {
     if (s.hostTime == lastInputTime_) return;
     lastInputTime_ = s.hostTime;
     if (active_ && info_.role == lh::DeviceRole::Controller &&
-        (s.systemClick || s.aClick || s.bClick || s.triggerClick || s.thumbstickClick || s.trigger > 0.5)) {
+        (s.systemClick || s.aClick || s.bClick || s.triggerClick || s.thumbstickClick || s.trackpadClick ||
+         s.gripClick || s.menuClick || s.trigger > 0.5)) {
       // Used after a minute of rest: this one is in the hand now (the other on a hip,
       // a shelf): it becomes the primary for its hand.
       const auto t = std::chrono::steady_clock::now();
@@ -564,7 +641,7 @@ class Device : public ITrackedDeviceServerDriver {
         double(s.bTouch), double(s.triggerClick), double(s.triggerTouch), s.trigger, double(curl > 0.7),
         grip, s.gripForce, double(s.thumbstickClick), double(s.thumbstickTouch), s.thumbstickX, s.thumbstickY,
         double(s.trackpadTouch), s.trackpadX, s.trackpadY, s.trackpadForce, s.fingerIndex, s.fingerMiddle,
-        s.fingerRing, s.fingerPinky};
+        s.fingerRing, s.fingerPinky, double(s.trackpadClick), double(s.gripClick), double(s.menuClick)};
     auto* in = ComponentInput();
     if (skeletonHandle_) {
       skeletonInput_ = s;
@@ -644,10 +721,10 @@ class Provider : public IServerTrackedDeviceProvider {
     const char* hostFrame = std::getenv("LH_HOST_FRAME");
     steamFrame_ = hostFrame && std::string(hostFrame) == "steamvr";
     std::string captureDir;
-    // Or "capture" in steamvr.vrsettings under driver_lighthouse (or driver_lhdrvrw): on
+    // Or "capture" in steamvr.vrsettings under driver_lighthouse (or driver_openhouse): on
     // Windows a new environment variable reaches SteamVR only after Steam restarts.
     std::string captureSetting;
-    for (const char* section : {"driver_lighthouse", "driver_lhdrvrw"}) {
+    for (const char* section : {"driver_lighthouse", "driver_openhouse"}) {
       char value[1024]{};
       VRSettings()->GetString(section, "capture", value, sizeof value);
       if (*value) { captureSetting = value; break; }
@@ -735,6 +812,11 @@ class Provider : public IServerTrackedDeviceProvider {
         stock_.Load(path, context_, [](const std::string& text) { Log(text); });
       }
     }
+    if (const int port = lh::telemetry::PortFromEnvironment(); port > 0) {
+      std::string telemetryError;
+      if (g_telemetry.Start(port, HostName(), &telemetryError)) Log(lh::LogLevel::Debug, "viewer telemetry on 127.0.0.1:" + std::to_string(port));
+      else Log(lh::LogLevel::Warn, "viewer telemetry unavailable: " + telemetryError);
+    }
     stop_ = false;
     thread_ = std::thread([this] { Main(); });
     return VRInitError_None;
@@ -760,6 +842,7 @@ class Provider : public IServerTrackedDeviceProvider {
     }
     stop_ = true;
     if (thread_.joinable()) thread_.join();
+    g_telemetry.Stop();
     if (session_) session_->Stop();
     session_.reset();
     g_recorder.Close();
@@ -815,11 +898,12 @@ class Provider : public IServerTrackedDeviceProvider {
     while (!stop_) {
       const double now = session_->HostNow();
       for (auto& e : session_->PollEvents()) {
-        if (e.type != lh::SessionEventType::TrackingStateChanged || std::getenv("LH_VERBOSE")) Log(e.text);
+        Log(e.level, e.text, e.serial, now);
         if (g_recorder.On()) {
           char t[32];
           std::snprintf(t, sizeof t, "%.6f", now);
-          g_recorder.Line(std::string("{\"t\":") + t + ",\"event\":" + Recorder::Quote(e.text) + "}");
+          g_recorder.Line(std::string("{\"t\":") + t + ",\"level\":\"" + lh::LogLevelName(e.level) + "\",\"event\":" +
+                          Recorder::Quote(e.text) + "}");
         }
       }
       std::deque<VREvent_t> haptics;
@@ -854,15 +938,13 @@ class Provider : public IServerTrackedDeviceProvider {
             Log("haptics routed to " + serial + details);
           }
           const bool queued = session_->Haptic(serial, h.fFrequency, h.fAmplitude, h.fDurationSeconds);
-          if (std::getenv("LH_VERBOSE")) {
-            char details[160];
-            std::snprintf(details, sizeof details, " duration=%.6g frequency=%.6g amplitude=%.6g", h.fDurationSeconds, h.fFrequency, h.fAmplitude);
-            Log("haptic " + serial + (queued ? " queued" : " ignored (replay/offline/disabled)") + details);
-          }
+          char details[160];
+          std::snprintf(details, sizeof details, " duration=%.6g frequency=%.6g amplitude=%.6g", h.fDurationSeconds, h.fFrequency, h.fAmplitude);
+          Log(lh::LogLevel::Debug, "haptic " + serial + (queued ? " queued" : " ignored (replay/offline/disabled)") + details, serial);
         }
-        if (!matched && (std::getenv("LH_VERBOSE") || !loggedUnrouted_.exchange(true))) {
+        if (!matched) {
           const auto& h = event.data.hapticVibration;
-          Log("unrouted haptic: device=" + std::to_string(event.trackedDeviceIndex) + " container=" +
+          Log(loggedUnrouted_.exchange(true) ? lh::LogLevel::Debug : lh::LogLevel::Info, "unrouted haptic: device=" + std::to_string(event.trackedDeviceIndex) + " container=" +
               std::to_string(h.containerHandle) + " component=" + std::to_string(h.componentHandle));
         }
       }
@@ -884,9 +966,8 @@ class Provider : public IServerTrackedDeviceProvider {
           auto device = std::make_unique<Device>(info);
           device->AttachExternal(hmd->objectId, hmd->alive);
           devices_[hmd->serial] = std::move(device);
-          if (!std::getenv("LH_STOCK_HMD_POSE")) stock_.OwnPose(hmd->objectId);
-          Log("head-mounted display " + hmd->serial + ": pose from our tracking" +
-              (std::getenv("LH_STOCK_HMD_POSE") ? " (LH_STOCK_HMD_POSE: stock's)" : ""));
+          stock_.OwnPose(hmd->objectId);
+          Log("head-mounted display " + hmd->serial + ": pose from our tracking");
         }
         const bool aligned = steamFrame_ ? alignment_.Update(snapshot_) : !snapshot_.roomId.empty();
         const Eigen::Isometry3d rawFromWorld = steamFrame_ ? alignment_.RawFromWorld() : hostFrame_.Update(snapshot_, now);
@@ -896,6 +977,7 @@ class Provider : public IServerTrackedDeviceProvider {
         }
         const uint64_t universe = UniverseId(aligned && steamFrame_ ? alignment_.RoomId() : snapshot_.roomId);
         roomPublisher_.Publish(snapshot_, rawFromWorld, now);
+        if (const std::string line = roomPublisher_.TakeLog(); !line.empty()) Log(line);
         for (auto& [serial, d] : devices_) {
           d->SetRawTransform(rawFromWorld);
           d->SetUniverse(universe);
@@ -904,6 +986,11 @@ class Provider : public IServerTrackedDeviceProvider {
           auto found = devices_.find(b.serial);
           if (found != devices_.end()) found->second->UpdateBase(b);
         }
+      }
+      if (now - lastTelemetry_ >= 0.05) {  // viewers: ~20 Hz is plenty to watch
+        lastTelemetry_ = now;
+        g_telemetry.PublishState(now, snapshot_, updates, session_->Receivers(),
+                                 {roomPublisher_.Settled(), roomPublisher_.Epoch(), lh::openvr::RoomSettle::kMaxSigma});
       }
       for (const auto& u : updates) {
         auto found = devices_.find(u.serial);
@@ -946,7 +1033,7 @@ class Provider : public IServerTrackedDeviceProvider {
       const auto& d = *dp;
       if (devices_.count(d.info.serial) || !d.info.enabled || d.info.role == lh::DeviceRole::Hmd) continue;
       DeviceStatic info{d.info.serial, d.info.model, d.info.manufacturer, RenderModel(d.info.renderModel), d.info.controllerRole,
-                        d.info.role, {}};
+                        d.info.role, {}, d.info.controllerType};
       Add(info, d.info.role == lh::DeviceRole::Controller ? TrackedDeviceClass_Controller
                                                           : TrackedDeviceClass_GenericTracker);
     }
@@ -995,6 +1082,7 @@ class Provider : public IServerTrackedDeviceProvider {
   lh::openvr::RoomPublisher roomPublisher_;
   std::string warnedRoom_;
   double lastSnapshot_ = -1e300;
+  double lastTelemetry_ = -1e300;
 };
 
 Provider g_provider;

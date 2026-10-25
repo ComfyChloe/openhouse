@@ -21,8 +21,6 @@ void TrackingSource::OnImu(const ImuSample& sample) {
   std::lock_guard lock(mutex_);
   // SwSync_OnImu (0x3e2d90) snapshots these before Source_PushImu.
   const double previousImuTime = latestImuTime_;
-  if (static const bool dbg = std::getenv("LH_DEBUG_IMU") != nullptr; dbg && previousImuTime > 0 && sample.time - previousImuTime > 0.012)
-    std::fprintf(stderr, "IMUGAP %p %.4f %.1f\n", static_cast<void*>(this), previousImuTime, (sample.time - previousImuTime) * 1000);
   QueuedImu queued{sample.time, {}, {}, sample.saturated};
   for (int i = 0; i < 3; ++i) {
     queued.accel[size_t(i)] = float(sample.accel[size_t(i)]);
@@ -122,7 +120,7 @@ bool TrackingSource::PopLog(std::string* out) {
     *out = "[multi] " + *out;
     return true;
   }
-  if (multi_.Active()) {  // the stock path re-acquiring in a multi room ("tdm sync acquired", "max of 2"): noise
+  if (multi_.Active()) {  // the two-base sync path re-acquiring in a multi room: noise
     while (tdm_.PopLog(nullptr)) {}
     return false;
   }

@@ -57,7 +57,7 @@ void HostFrame::Load(const std::string& path) {
 void HostFrame::Save() const {
   if (path_.empty()) return;
   nlohmann::json j;
-  j["note"] = "lhdrvrw host frame: each room's origin base is reported at this pose, whatever the room does "
+  j["note"] = "openhouse host frame: each room's origin base is reported at this pose, whatever the room does "
               "inside (tools aligning the lighthouse frame count on it). Delete to re-anchor.";
   for (const auto& [room, a] : anchors_) {
     const Eigen::Quaterniond q(a.pose.rotation());

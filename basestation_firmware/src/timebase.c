@@ -374,7 +374,7 @@ void CT32B1_IRQHandler(void)
         /* ALL: every station flashes every revolution (and sends an OOTX bit
          * each time). MASTER+ACTIVE: the master every revolution, others only
          * when they sweep; the gate is set ahead of this revolution's index
-         * edges. Measured (lhdrvrw captures/ms-a): the gate does not stop a
+         * edges. Measured (openhouse captures/ms-a): the gate does not stop a
          * slave's flash, so MASTER+ACTIVE slaves still flash, with no OOTX bit. */
         flash_rev = MC->policy == MP_ALL || MC->slot == 0 || multi_sweeps_now() ||
                     !multi_mask_known() || !(multi_mask_live() & (1u << MC->slot));  /* seen to join */

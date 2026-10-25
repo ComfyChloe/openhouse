@@ -88,6 +88,7 @@ int Usage() {
           "usage:\n"
           "  lhtool capture OUT.lhraw [SECONDS]\n"
           "  lhtool stats IN.lhraw\n"
+          "  lhtool trim IN.lhraw OUT.lhraw --to SECONDS   the first SECONDS of a capture (test fixtures)\n"
           "  lhtool stats live [SECONDS]\n"
           "  lhtool track IN.lhraw [--db DATABASE.json]\n"
           "  lhtool track live [SECONDS] [--db DATABASE.json]\n"
@@ -245,7 +246,7 @@ int SessionCommand(int argc, char** argv) {
   double lastSample = -1e9;
   auto emit = [&] {
     for (const auto& e : session->PollEvents()) {
-      nlohmann::json j = {{"event", e.text}, {"t", e.hostTime}, {"serial", e.serial}};
+      nlohmann::json j = {{"event", e.text}, {"t", e.hostTime}, {"serial", e.serial}, {"level", lh::LogLevelName(e.level)}};
       printf("%s\n", j.dump().c_str());
     }
     const auto snap = session->Snapshot();
@@ -286,12 +287,40 @@ int SessionCommand(int argc, char** argv) {
   return 0;
 }
 
+// The first `seconds` of a capture: every endpoint record, and the reports up to that
+// capture time (reports stamped 0 come from the header and are kept). Only the start
+// of a capture can be cut this way: devices negotiate their protocol when they attach.
+int TrimCommand(int argc, char** argv) {
+  double seconds = -1;
+  for (int i = 4; i + 1 < argc; ++i)
+    if (std::string(argv[i]) == "--to") seconds = std::atof(argv[i + 1]);
+  if (argc < 6 || seconds <= 0) return Usage();
+  lh::usb::RawCaptureReader in;
+  lh::usb::RawCaptureWriter out;
+  if (!in.Open(argv[2])) { fprintf(stderr, "cannot open %s\n", argv[2]); return 1; }
+  if (!out.Open(argv[3])) { fprintf(stderr, "cannot create %s\n", argv[3]); return 1; }
+  double start = -1;
+  size_t kept = 0, dropped = 0;
+  const bool ok = in.ReadAll([&](const lh::usb::EndpointInfo& e) { out.WriteEndpoint(e); },
+                             [&](const lh::usb::RawReport& r) {
+                               if (r.hostTime > 0 && start < 0) start = r.hostTime;
+                               if (r.hostTime > 0 && r.hostTime - start > seconds) { ++dropped; return; }
+                               out.WriteReport(r.hostTime, r.ep, r.lastInBatch, r.data.data(), r.data.size());
+                               ++kept;
+                             });
+  out.Close();
+  if (!ok || !out.Healthy()) { fprintf(stderr, "trim failed\n"); return 1; }
+  fprintf(stderr, "kept %zu reports (%.0f s), dropped %zu\n", kept, seconds, dropped);
+  return 0;
+}
+
 int main(int argc, char** argv) {
   if (argc < 2) return Usage();
   std::signal(SIGINT, Stop);
   std::signal(SIGTERM, Stop);
   std::string cmd = argv[1];
   if (cmd == "track") return Track(argc, argv);
+  if (cmd == "trim") return TrimCommand(argc, argv);
   if (cmd == "session" && argc >= 3) return SessionCommand(argc, argv);
   if (cmd == "haptics" && argc >= 3) return HapticsCommand(argc, argv);
   if (cmd == "capture" && argc >= 3) {

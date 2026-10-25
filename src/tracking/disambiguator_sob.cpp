@@ -58,7 +58,7 @@ void SobDisambiguator::OnBeamWord(double t, int channel, int ootxBit, int genera
   latest_ = std::max(latest_, t);
   Channel& c = channels_[size_t(channel)];
   active_ = true;
-  if (c.seen && c.generation != generation) {  // stock: "(generation changed)"
+  if (c.seen && c.generation != generation) {  // stock: "(new sync generation)"
     c = Channel{};
   }
   if (!c.seen) {

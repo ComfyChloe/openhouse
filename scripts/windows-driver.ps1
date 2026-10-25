@@ -43,7 +43,7 @@ if ($Action -eq 'Install') {
         Copy-Item -LiteralPath $target -Destination $backup -Force
         Write-Output "Saved SteamVR's driver as $backup"
     } elseif (-not (Test-Path $backup)) {
-        throw "The installed driver is already lhdrvrw's and there is no stock backup ($backup). Verify SteamVR's files in Steam, then install again."
+        throw "The installed driver is already openhouse's and there is no stock backup ($backup). Verify SteamVR's files in Steam, then install again."
     }
     $source = $DriverPath
 } else {

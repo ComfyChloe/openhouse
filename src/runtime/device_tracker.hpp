@@ -37,6 +37,7 @@ struct TrackerOutput {
   Eigen::Vector3d velocity = Eigen::Vector3d::Zero(), angularVelocity = Eigen::Vector3d::Zero();
   uint32_t primary = 0;
   std::vector<uint32_t> bases;
+  std::vector<DevicePose::Coverage> coverage;  // light per base, last 0.5 s
   uint64_t updates = 0;
   Eigen::Vector3d filterPosition = Eigen::Vector3d::Zero();  // world, at filterTime (no prediction)
   double filterTime = 0;
@@ -120,8 +121,6 @@ class DeviceTracker {
   std::map<uint32_t, int> disagreeing_;   // rejection streaks of an alt base the room and filter agree on
   std::map<uint32_t, std::pair<uint32_t, uint32_t>> altEpochs_;
   std::map<uint32_t, double> loosened_;  // alternate bases loosened for a relearn: since when
-  double firstFrameTime_ = -1e300;  // LH_DEBUG_BUMP
-  std::map<int, double> bumpAxis0_;  // LH_DEBUG_BUMP: each sensor's last axis-0 angle
   uint32_t reacquireOn_ = 0;              // CheckHealth: the pose is wrong, start over on this base
   std::optional<std::pair<uint32_t, double>> avoidBase_;  // (base, until Now()): don't bootstrap on it
   std::map<uint32_t, std::deque<std::pair<double, int>>> recentUsed_;  // (sync time, sensors) of used frames, 0.5 s

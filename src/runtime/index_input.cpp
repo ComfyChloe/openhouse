@@ -7,6 +7,7 @@ namespace {
 bool SameInput(const ControllerInput& a, const ControllerInput& b) {
   auto key = [](const ControllerInput& c) {
     return std::tie(c.systemClick, c.aClick, c.bClick, c.triggerClick, c.thumbstickClick, c.trackpadTouch,
+                    c.trackpadClick, c.gripClick, c.menuClick,
                     c.systemTouch, c.aTouch, c.bTouch, c.triggerTouch, c.thumbstickTouch, c.trigger, c.thumbstickX,
                     c.thumbstickY, c.trackpadX, c.trackpadY, c.trackpadForce, c.gripForce, c.fingerIndex,
                     c.fingerMiddle, c.fingerRing, c.fingerPinky);
@@ -15,10 +16,25 @@ bool SameInput(const ControllerInput& a, const ControllerInput& b) {
 }
 }  // namespace
 
-bool IndexInputDecoder::Apply(const InputReport& r, double hostTime) {
+bool ControllerInputDecoder::Apply(const InputReport& r, double hostTime) {
   if (r.format == InputFormat::Raw) return false;
   const ControllerInput before = state_;
   auto& s = state_;
+  if (type_ == ControllerType::ViveWand) {
+    if (r.hasButtons) {
+      s.triggerClick = r.buttons & 0x01;
+      s.trackpadTouch = r.buttons & 0x02;
+      s.trackpadClick = r.buttons & 0x04;
+      s.systemClick = r.buttons & 0x08;
+      s.gripClick = r.buttons & 0x10;
+      s.menuClick = r.buttons & 0x20;
+    }
+    if (r.hasTrigger) s.trigger = r.trigger / 255.0;
+    if (r.hasAxes) { s.trackpadX = r.axisX / 32768.0; s.trackpadY = r.axisY / 32768.0; }
+    if (!s.trackpadTouch) s.trackpadX = s.trackpadY = 0;
+    s.hostTime = hostTime;
+    return !SameInput(before, s);
+  }
   if (r.hasButtons) {
     s.triggerClick = r.buttons & 0x01;
     s.trackpadTouch = r.buttons & 0x02;

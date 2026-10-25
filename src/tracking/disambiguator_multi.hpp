@@ -105,7 +105,6 @@ class MultiDisambiguator {
   int periodSamples_ = 0;
   double lastFlash_ = 0;
   int64_t halfIndex_ = 0;
-  double nextDebug_ = 0;
   int stationCount_ = 0;
   int unmatched_ = 0;  // consecutive groups with no flash on the slot grid
   bool policyAll_ = false;  // from an OOTX mode byte  // N; 0 until known  // half revolutions since the first reference

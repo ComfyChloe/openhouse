@@ -1,3 +1,4 @@
+#include "common/test_paths.hpp"
 #include <set>
 // Tests for the lh runtime: room map, Index input, device roles, and an end-to-end
 // session replay of the recorded motion capture.
@@ -41,7 +42,7 @@ namespace {
 using namespace lh;
 using namespace lh::runtime;
 
-const std::string kCapture = std::string(LH_SOURCE_DIR) + "/captures/session-20261016-142931Z-147083";
+const std::string kCapture = TestCapture("session-20261016-142931Z-147083");
 
 std::string ReadFile(const std::string& path) {
   std::ifstream in(path);
@@ -65,16 +66,6 @@ BaseConfig Config(uint32_t serial) {
   return c;
 }
 
-namespace {
-void SetEnv(const char* name, const char* value) {  // nullptr: unset
-#ifdef _WIN32
-  _putenv_s(name, value ? value : "");
-#else
-  if (value) setenv(name, value, 1); else unsetenv(name);
-#endif
-}
-}  // namespace
-
 TEST(DeviceRole, ComesFromDeviceClassOnly) {
   EXPECT_EQ(RoleFromConfig(R"({"device_class":"hmd","model_number":"Vive. MV"})"), DeviceRole::Hmd);
   EXPECT_EQ(RoleFromConfig(R"({"device_class":"controller","model_number":"Knuckles Right"})"), DeviceRole::Controller);
@@ -85,12 +76,40 @@ TEST(DeviceRole, ComesFromDeviceClassOnly) {
   // Physically a Vive wand, configured as a tracker.
   EXPECT_EQ(RoleFromConfig(R"({"device_class":"generic_tracker","render_model":"vr_controller_vive_1_5"})"),
             DeviceRole::Tracker);
-  // Non-Index controllers are handled as trackers for now.
-  EXPECT_EQ(RoleFromConfig(R"({"device_class":"controller","model_number":"Vive Controller MV"})"), DeviceRole::Tracker);
+  // Vive wands (1.0 and the 2.0 Pro) are controllers; other controllers stay trackers.
+  EXPECT_EQ(RoleFromConfig(R"({"device_class":"controller","model_number":"Vive. Controller MV"})"), DeviceRole::Controller);
+  EXPECT_EQ(RoleFromConfig(R"({"device_class":"controller","model_number":"VIVE Controller Pro MV"})"),
+            DeviceRole::Controller);
+  EXPECT_EQ(RoleFromConfig(R"({"device_class":"controller","model_number":"Something Else"})"), DeviceRole::Tracker);
+  EXPECT_EQ(ControllerTypeFromConfig(R"({"device_class":"controller","render_model":"vr_controller_vive_1_5"})"),
+            ControllerType::ViveWand);
+  EXPECT_EQ(ControllerTypeFromConfig(R"({"device_class":"controller","model_number":"Knuckles Right"})"),
+            ControllerType::Index);
+}
+
+TEST(ViveWandInput, DecodesButtonsTriggerAndTrackpad) {
+  ControllerInputDecoder d(ControllerType::ViveWand);
+  InputReport r;
+  r.hasButtons = true; r.buttons = 0x01 | 0x02 | 0x04 | 0x10 | 0x20;  // trigger, pad touch+click, grip, menu
+  r.hasTrigger = true; r.trigger = 255;
+  r.hasAxes = true; r.axisX = 16384; r.axisY = -16384;
+  EXPECT_TRUE(d.Apply(r, 1.0));
+  const auto& s = d.State();
+  EXPECT_TRUE(s.triggerClick && s.trackpadTouch && s.trackpadClick && s.gripClick && s.menuClick);
+  EXPECT_FALSE(s.systemClick || s.aClick || s.thumbstickClick);
+  EXPECT_DOUBLE_EQ(s.trackpadX, 0.5);
+  EXPECT_DOUBLE_EQ(s.trackpadY, -0.5);
+  EXPECT_DOUBLE_EQ(s.thumbstickX, 0.0);  // a wand has no thumbstick
+  InputReport release;
+  release.hasButtons = true; release.buttons = 0x08;  // system only, finger off the pad
+  d.Apply(release, 2.0);
+  EXPECT_TRUE(d.State().systemClick);
+  EXPECT_FALSE(d.State().gripClick);
+  EXPECT_DOUBLE_EQ(d.State().trackpadX, 0.0);
 }
 
 TEST(IndexInput, DecodesButtonsAxesAndExtendedRecord) {
-  IndexInputDecoder d;
+  ControllerInputDecoder d;
   InputReport r;
   r.hasButtons = true; r.buttons = 0x01 | 0x10 | 0x08;  // trigger click, A, system
   r.hasTrigger = true; r.trigger = 255;
@@ -244,8 +263,31 @@ TEST(RoomMap, LearnsRefinesAndRelearnsBases) {
 // count says it was power cycled.
 // By default a turned origin makes the stored room stale: a new room is learned (the
 // headset otherwise fought the old layout: teststill, 2026-10-23).
+// A well-placed base is locked: solves far off don't move it; only its accelerometer
+// turning (a bump) lets the solver re-place it.
+TEST(RoomMap, LockedBaseMovesOnlyWhenBumped) {
+  RoomMap room;
+  BaseDynamicState level;
+  level.accelDir = {0.f, 1.f, 0.f};
+  room.OnBaseSeen(Config(1), level);
+  ASSERT_TRUE(room.EstablishOrigin(1, {0.0, 0.0}, 1e-6));
+  room.OnBaseSeen(Config(2), level);
+  const Eigen::Isometry3d at = Pose(3, 0.5, -2, 40);
+  room.ApplySolved(2, at, 1e-6, 1e-7, 150, 1e-4);  // placed from 150 keyframes
+  ASSERT_TRUE(RoomMap::Locked(*room.Base(2)));
+  const Eigen::Isometry3d away = Eigen::Translation3d(0.3, 0, 0) * at;
+  for (int i = 0; i < 5; ++i) room.ApplySolved(2, away, 1e-6, 1e-7, 150, 1e-4);
+  EXPECT_TRUE(room.Base(2)->worldFromBase.isApprox(at, 1e-9));
+  BaseDynamicState turned;
+  turned.accelDir = {0.f, 0.94f, 0.34f};  // 20 deg
+  room.OnBaseSeen(Config(2), turned);
+  room.OnBaseSeen(Config(2), turned);
+  EXPECT_FALSE(RoomMap::Locked(*room.Base(2)));
+  room.ApplySolved(2, away, 1e-6, 1e-7, 20, 1e-4);
+  EXPECT_NEAR(room.Base(2)->worldFromBase.translation().x(), away.translation().x(), 1e-6);
+}
+
 TEST(RoomMap, TurnedOriginStartsANewRoom) {
-  SetEnv("LH_RELEVEL_FROM_BASE", nullptr);
   const auto path = (std::filesystem::temp_directory_path() / ("lh-test-stale-" + std::to_string(::getpid()) + ".json")).string();
   const Eigen::Vector3d upright(0.024, -1.0, -0.008), mounted(0.128, -0.738, 0.663);
   BaseDynamicState saved, live;
@@ -283,8 +325,7 @@ TEST(RoomMap, TurnedOriginStartsANewRoom) {
   EXPECT_FALSE(same.Empty());
 }
 
-TEST(RoomMap, ReLevelsFromTheOriginAccelerometerEachSession) {
-  SetEnv("LH_RELEVEL_FROM_BASE", "1");  // opt-in since base accelerometers proved unreliable
+TEST(RoomMap, PowerCycledOriginKeepsTheOthersLoosely) {
   const auto path = (std::filesystem::temp_directory_path() / ("lh-test-relevel-" + std::to_string(::getpid()) + ".json")).string();
   const Eigen::Vector3d upright(0.024, -1.0, -0.008), mounted(0.128, -0.738, 0.663);
   BaseDynamicState saved, live;
@@ -292,37 +333,6 @@ TEST(RoomMap, ReLevelsFromTheOriginAccelerometerEachSession) {
   saved.sysUnlockCount = 13;
   live.accelDir = {float(mounted.x()), float(mounted.y()), float(mounted.z())};
   live.sysUnlockCount = 13;
-  double distance = 0;
-  {
-    RoomMap room;
-    room.OnBaseSeen(Config(1), saved);
-    ASSERT_TRUE(room.EstablishOrigin(1, TiltFromUp(upright), 1e-6));  // SteamVR-like tiny variance
-    room.Observe("dev", 1, 2, Pose(3, 0.5, -2, 40).inverse() * room.Base(1)->worldFromBase, 1e-5, 1e-6, 0.0);
-    ASSERT_NE(room.Base(2), nullptr);
-    distance = room.Base(2)->worldFromBase.translation().norm();
-    ASSERT_TRUE(room.Save(path));
-  }
-  RoomMap room;
-  ASSERT_TRUE(room.Load(path));
-  std::filesystem::remove(path);
-  room.OnBaseSeen(Config(1), live);
-  const RoomBase* origin = room.Base(1);
-  ASSERT_NE(room.Base(2), nullptr);
-  ASSERT_NE(origin, nullptr);
-  EXPECT_NEAR((origin->worldFromBase.rotation() * mounted.normalized()).y(), 1.0, 1e-6);  // level again
-  EXPECT_LT(origin->worldFromBase.translation().norm(), 1e-9);  // the origin stays the origin
-  EXPECT_NEAR(room.Base(2)->worldFromBase.translation().norm(), distance, 1e-9);  // the layout is kept
-  EXPECT_GE(origin->rotationVariance, 1.5e-4);  // the filter may refine it from here
-  bool said = false;
-  for (const auto& line : room.TakeLogs()) said |= line.find("Re-levelled room") != std::string::npos;
-  EXPECT_TRUE(said);
-  // Once a session: a later sighting doesn't touch it; the same reset count keeps the others.
-  const Eigen::Isometry3d after = origin->worldFromBase;
-  room.OnBaseSeen(Config(1), saved);
-  EXPECT_TRUE(room.Base(1)->worldFromBase.isApprox(after, 1e-12));
-  EXPECT_LT(room.Base(2)->positionVariance, 1e-3);
-  EXPECT_TRUE(room.TakeRelearned().empty());
-
   // A power-cycled origin (new reset count: rotor locks since power-up, not a move): the
   // others' places are kept with little weight, not thrown away; a level that agrees
   // with the accelerometer isn't touched.
@@ -349,7 +359,6 @@ TEST(RoomMap, ReLevelsFromTheOriginAccelerometerEachSession) {
   EXPECT_TRUE(again.TakeRelearned().empty());
   ASSERT_NE(again.Base(1), nullptr);
   EXPECT_TRUE(again.Base(1)->worldFromBase.isApprox(level, 1e-9));
-  SetEnv("LH_RELEVEL_FROM_BASE", nullptr);
 }
 
 // A hand behind the body: no light at all for 1.5 s. The device coasts on its IMU and
@@ -500,7 +509,7 @@ ReplayResult Replay(const std::string& roomPath, const std::string& capture = kC
 // frame jump (stock: 19.7 cm when light came back) and no inertial fly-away while it
 // is hidden (stock: 23.4 cm). captures/controller-moving-hidden, every pose at 100 Hz.
 TEST(OutputStage, NoJumpsAndNoFlyAwayWhenHidden) {
-  const std::string capture = std::string(LH_SOURCE_DIR) + "/captures/controller-moving-hidden/input.lhraw";
+  const std::string capture = TestCapture("controller-moving-hidden/input.lhraw");
   if (!std::filesystem::exists(capture)) GTEST_SKIP();
   const auto trace = (std::filesystem::temp_directory_path() / ("lh-test-trace-" + std::to_string(::getpid()) + ".jsonl")).string();
   SessionOptions options;
@@ -563,7 +572,7 @@ TEST(SessionReplay, BootstrapsDespiteOneBadSensor) {
 #ifndef LH_TEST_USB
   GTEST_SKIP() << "replay built without USB/capture layer";
 #else
-  const std::string capture = std::string(LH_SOURCE_DIR) + "/captures/floor-reflection";
+  const std::string capture = TestCapture("floor-reflection");
   if (!std::filesystem::exists(capture + "/input.lhraw")) GTEST_SKIP() << "no floor capture";
   const auto room = (std::filesystem::temp_directory_path() / ("lh-test-floor-room-" + std::to_string(::getpid()) + ".json")).string();
   std::filesystem::remove(room);
@@ -807,7 +816,7 @@ bool MsHasEvent(const MsReplay& r, const std::string& text) {
 // layout is detected, both stations' OOTX decode (the slave's only on its own sweeping
 // flashes) and the controller tracks from the start.
 TEST(MultiStation, DetectsDecodesAndTracks) {
-  const std::string capture = std::string(LH_SOURCE_DIR) + "/captures/ms-a/input.lhraw";
+  const std::string capture = TestCapture("ms-a/input.lhraw");
   if (!std::filesystem::exists(capture)) GTEST_SKIP();
   const auto r = MsRun(capture, "LHR-13DA81D1", 40);
   EXPECT_TRUE(MsHasEvent(r, "multi-station layout detected"));
@@ -824,7 +833,7 @@ TEST(MultiStation, DetectsDecodesAndTracks) {
 
 // A stock 2-station room never switches to the multi-station layout.
 TEST(MultiStation, StockRoomStaysStock) {
-  const std::string capture = std::string(LH_SOURCE_DIR) + "/captures/controller-moving-hidden/input.lhraw";
+  const std::string capture = TestCapture("controller-moving-hidden/input.lhraw");
   if (!std::filesystem::exists(capture)) GTEST_SKIP();
   const auto r = MsRun(capture, "", 0);
   EXPECT_FALSE(MsHasEvent(r, "multi-station"));
@@ -836,7 +845,7 @@ TEST(MultiStation, StockRoomStaysStock) {
 // primary switches to the visible base instead of drifting off with it (it ran off at
 // 1.4 m/s before).
 TEST(MultiStation, PolicyAllAndBlockedStations) {
-  const std::string capture = std::string(LH_SOURCE_DIR) + "/captures/ms-n2-all/input.lhraw";
+  const std::string capture = TestCapture("ms-n2-all/input.lhraw");
   if (!std::filesystem::exists(capture)) GTEST_SKIP();
   const auto r = MsRun(capture, "LHR-13DA81D1", 0);
   EXPECT_TRUE(MsHasEvent(r, "policy ALL"));
@@ -854,7 +863,7 @@ TEST(MultiStation, PolicyAllAndBlockedStations) {
 // up must not wedge the multi timing reference, and the handover to the multi path must
 // not lose the device.
 TEST(MultiStation, WakeFromStandbyHandover) {
-  const std::string capture = std::string(LH_SOURCE_DIR) + "/captures/ms-n2-startup/input.lhraw";
+  const std::string capture = TestCapture("ms-n2-startup/input.lhraw");
   if (!std::filesystem::exists(capture)) GTEST_SKIP();
   const auto r = MsRun(capture, "LHR-13DA81D1", 0);
   // (Short stock IMU-alignment resets also happen in stock rooms; they recover in
@@ -874,3 +883,54 @@ TEST(MultiStation, WakeFromStandbyHandover) {
   for (const auto& b : r.snapshot.bases) if (b.seen) seen.insert(b.serial);
   EXPECT_TRUE(seen.count("LHB-A101B835"));
 }
+
+// Regression on the bundled 2.0 recordings (tests/data/captures): every device tracks
+// (>= 97 % valid after a 10 s warm-up) and never jumps 20 cm between host frames.
+// lh2-one-controller: one Index controller, 31 s. lh2-five-devices: two controllers and
+// three trackers in a four-base 2.0 room, the first 30 s.
+class Lh2Regression : public ::testing::TestWithParam<const char*> {};
+TEST_P(Lh2Regression, TracksEveryDeviceWithoutJumps) {
+  const std::string capture = TestCapture(std::string(GetParam()) + "/input.lhraw");
+  if (!std::filesystem::exists(capture)) GTEST_SKIP() << capture;
+  const auto trace = (std::filesystem::temp_directory_path() / ("lh-test-lh2-" + std::to_string(::getpid()) + ".jsonl")).string();
+  SessionOptions options;
+  options.replayPath = capture;
+  options.replayRealtime = false;
+  options.roomMapPath = "";
+  options.replayTracePath = trace;
+  auto session = Session::Create(options);
+  std::string error;
+  ASSERT_TRUE(session->Start(&error)) << error;
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(180);
+  while (!session->Finished() && std::chrono::steady_clock::now() < deadline) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  session->Stop();
+  session.reset();
+  struct P { double t; bool valid; Eigen::Vector3d p; };
+  std::map<std::string, std::vector<P>> per;
+  double t0 = -1;
+  std::ifstream in(trace);
+  for (std::string line; std::getline(in, line);) {
+    const auto j = nlohmann::json::parse(line);
+    const auto& x = j["position"];
+    const double t = j["t"].get<double>();
+    if (t0 < 0) t0 = t;
+    if (t - t0 < 10) continue;
+    per[j["serial"].get<std::string>()].push_back({t, j["valid"].get<int>() != 0,
+                                                   Eigen::Vector3d(x[0].get<double>(), x[1].get<double>(), x[2].get<double>())});
+  }
+  in.close();
+  std::filesystem::remove(trace);
+  ASSERT_FALSE(per.empty());
+  for (const auto& [serial, poses] : per) {
+    int valid = 0;
+    double step = 0;
+    for (size_t i = 0; i < poses.size(); ++i) {
+      valid += poses[i].valid;
+      if (i && poses[i - 1].valid && poses[i].valid && poses[i].t - poses[i - 1].t < 0.05)
+        step = std::max(step, (poses[i].p - poses[i - 1].p).norm());
+    }
+    EXPECT_GE(double(valid) / poses.size(), 0.97) << serial;
+    EXPECT_LT(step, 0.20) << serial << ": a host frame jumped";
+  }
+}
+INSTANTIATE_TEST_SUITE_P(Bundled, Lh2Regression, ::testing::Values("lh2-one-controller", "lh2-five-devices"));

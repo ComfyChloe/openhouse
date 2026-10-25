@@ -128,6 +128,21 @@ std::string Lower(std::string s) {
 }
 }  // namespace
 
+namespace {
+std::string ModelHint(const json& j) {
+  return Lower(j.value("model_number", "") + " " + j.value("render_model", "") + " " + j.value("input_profile", ""));
+}
+bool IsIndexHint(const std::string& hint) {
+  return hint.find("knuckles") != std::string::npos || hint.find("index") != std::string::npos ||
+         hint.find("knu_") != std::string::npos;
+}
+// Vive wands: "Vive. Controller MV" (1.0), "VIVE Controller Pro MV" (2.0),
+// render model vr_controller_vive_1_5. Not seen on hardware here; from their configs.
+bool IsWandHint(const std::string& hint) {
+  return hint.find("vive") != std::string::npos && hint.find("controller") != std::string::npos;
+}
+}  // namespace
+
 DeviceRole RoleFromConfig(const std::string& configJson) {
   const json j = json::parse(configJson);
   const std::string cls = Lower(j.value("device_class", ""));
@@ -135,17 +150,23 @@ DeviceRole RoleFromConfig(const std::string& configJson) {
   // As the stock driver: "generic_tracker" makes a controller a tracker (e.g. on a hip).
   if (Lower(j.value("tracked_controller_role", "")) == "generic_tracker") return DeviceRole::Tracker;
   if (cls == "controller") {
-    const std::string hint = Lower(j.value("model_number", "") + " " + j.value("render_model", "") + " " +
-                                   j.value("input_profile", ""));
-    if (hint.find("knuckles") != std::string::npos || hint.find("index") != std::string::npos ||
-        hint.find("knu_") != std::string::npos)
-      return DeviceRole::Controller;
+    const std::string hint = ModelHint(j);
+    if (IsIndexHint(hint) || IsWandHint(hint)) return DeviceRole::Controller;
   }
   return DeviceRole::Tracker;
 }
 
+ControllerType ControllerTypeFromConfig(const std::string& configJson) {
+  const std::string hint = ModelHint(json::parse(configJson));
+  return !IsIndexHint(hint) && IsWandHint(hint) ? ControllerType::ViveWand : ControllerType::Index;
+}
+
 class SessionImpl final : public Session, public InputSinkBase {
  public:
+  void OnTransportLog(LogLevel level, const std::string& text) override {
+    std::lock_guard lock(mutex_);
+    Emit(SessionEventType::Log, "", text, level);
+  }
   explicit SessionImpl(SessionOptions options) : options_(std::move(options)) {}
   ~SessionImpl() override { Stop(); }
 
@@ -191,7 +212,7 @@ class SessionImpl final : public Session, public InputSinkBase {
   struct Device {
     DeviceInfo info;
     std::unique_ptr<DeviceTracker> tracker;
-    std::optional<IndexInputDecoder> input;
+    std::optional<ControllerInputDecoder> input;
     Eigen::Isometry3d imuFromHead = Eigen::Isometry3d::Identity();
     double clockOffset = 0;
     bool haveClock = false;
@@ -208,7 +229,8 @@ class SessionImpl final : public Session, public InputSinkBase {
     bool seen = false;
   };
 
-  void Emit(SessionEventType type, const std::string& serial, std::string text);
+  // level: as given, else ClassifyLog(text).
+  void Emit(SessionEventType type, const std::string& serial, std::string text, std::optional<LogLevel> level = {});
   void Tick() { if (options_.replayPath.empty()) now_ = std::max(now_, SteadyNow()); }
   void Touch(Device& d, double deviceTime);
   void Process(const DeviceId& id, Device& d);
@@ -218,7 +240,6 @@ class SessionImpl final : public Session, public InputSinkBase {
   bool SolveDue() const;
   RoomSolveInput SolveInput();
   void ApplySolve(const RoomSolveOutput& out);
-  void DebugSplit(const RoomSolveOutput& all);
   void SolverMain();
   void LoadSettings();
   void SaveSettings();
@@ -323,7 +344,7 @@ bool SessionImpl::Start(std::string* error) {
     o.steamLighthouseConfigDir = options_.steamConfigDir;
     o.capturePath = options_.capturePath;
     o.onCommandResult = [this](const usb::DeviceCommandResult& result) {
-      if (std::string(result.status) == "written" && !std::getenv("LH_VERBOSE")) return;
+      const bool routine = std::string(result.status) == "written";
       std::lock_guard lock(mutex_);
       std::ostringstream text;
       text << (result.powerOff ? "power-off " : "haptic ") << result.serial << ": " << result.status
@@ -332,7 +353,7 @@ bool SessionImpl::Start(std::string* error) {
                                 << ", off=" << (result.report[6] | result.report[7] << 8)
                                 << ", repeats=" << (result.report[8] | result.report[9] << 8);
       text << ")";
-      Emit(SessionEventType::Log, result.serial, text.str());
+      Emit(SessionEventType::Log, result.serial, text.str(), routine ? LogLevel::Debug : LogLevel::Info);
     };
     usb_ = std::make_unique<usb::UsbTransport>(this, o);
     if (!usb_->Start()) {
@@ -417,7 +438,6 @@ void SessionImpl::ReplayMain() {
                  },
                  [&](const usb::RawReport& r) {
                    if (stop_) return;
-                   static int dbg = 0; if (std::getenv("LH_DEBUG_REPLAY") && dbg++ < 8) fprintf(stderr, "report %.6f ep %u\n", r.hostTime, unsigned(r.ep));
                    if (captureStart < 0 && r.hostTime > 0) captureStart = r.hostTime;  // header-time reports carry 0
                    const double at = captureStart < 0 ? 0 : r.hostTime - captureStart;
                    if (skipped.count(r.ep)) return;
@@ -455,9 +475,10 @@ void SessionImpl::ReplayMain() {
 #endif
 }
 
-void SessionImpl::Emit(SessionEventType type, const std::string& serial, std::string text) {
+void SessionImpl::Emit(SessionEventType type, const std::string& serial, std::string text, std::optional<LogLevel> level) {
   if (events_.size() > 4096) events_.pop_front();
-  events_.push_back({now_, type, serial, std::move(text)});
+  const LogLevel l = level ? *level : ClassifyLog(text);
+  events_.push_back({now_, type, serial, std::move(text), l});
 }
 
 void SessionImpl::OnDeviceAttached(const DeviceId& id, const std::string& configJson) {
@@ -489,6 +510,7 @@ void SessionImpl::OnDeviceAttached(const DeviceId& id, const std::string& config
     d.input.reset();
     d.info.configJson = config;
     d.info.role = RoleFromConfig(config);
+    d.info.controllerType = ControllerTypeFromConfig(config);
     d.info.deviceClass = j.value("device_class", "");
     d.info.model = j.value("model_number", "");
     d.info.manufacturer = j.value("manufacturer", "");
@@ -526,7 +548,7 @@ void SessionImpl::OnDeviceAttached(const DeviceId& id, const std::string& config
     models_[id] = d.tracker->ImuModel();
     for (const auto& [serial, b] : bases_) d.tracker->OnBaseConfig(b.config, b.dynamic);
     PushIdentities();
-    if (d.info.role == DeviceRole::Controller) d.input.emplace();
+    if (d.info.role == DeviceRole::Controller) d.input.emplace(d.info.controllerType);
     else d.input.reset();
     Emit(SessionEventType::DeviceActivated, id,
          id + " activated as " + ToString(d.info.role) + (d.info.model.empty() ? "" : " (" + d.info.model + ")") +
@@ -656,7 +678,7 @@ void SessionImpl::OnInput(const DeviceId& id, const InputReport& report) {
   Tick();
   if (!Enabled(id)) return;
   auto found = devices_.find(id);
-  if (found == devices_.end() || !found->second.input) return;  // inputs of non-Index devices are ignored
+  if (found == devices_.end() || !found->second.input) return;  // trackers' inputs are ignored
   auto& d = found->second;
   d.input->Apply(report, d.haveClock ? HostTime(d, report.time) : now_);
 }
@@ -678,11 +700,6 @@ void SessionImpl::Process(const DeviceId& id, Device& d) {
   if (now_ - lastAdvance_ >= 0.01) { lastAdvance_ = now_; room_.Advance(now_); }
   std::vector<std::pair<BaseConfig, BaseDynamicState>> decoded;
   d.tracker->Process(&decoded);
-  if (std::getenv("LH_DEBUG_TDM")) {
-    const auto& st = d.tracker->SourceStats();
-    fprintf(stderr, "TDM %s st=%d total=%d frames=%llu attempts=%d boot=%d\n", id.c_str(), d.tracker->SensorType(), st.total,
-            (unsigned long long)d.tracker->FramesHandled(), d.tracker->BootstrapAttempts(), int(d.tracker->Bootstrapped()));
-  }
   tdm::TdmDisambiguator::Identity identity;
   bool newIdentity = false;
   while (d.tracker->Source().PopIdentity(&identity)) {
@@ -695,9 +712,12 @@ void SessionImpl::Process(const DeviceId& id, Device& d) {
   for (const auto& [config, dynamic] : decoded) {
     auto& base = bases_[config.serial];
     const bool first = !base.seen;
-    if (static const bool dbg = std::getenv("LH_DEBUG_BASE_ACCEL") != nullptr; dbg && first)
-      std::fprintf(stderr, "BASEACCEL %08X fw=%u accel %.3f %.3f %.3f\n", config.serial, unsigned(dynamic.firmwareVersion),
-                   dynamic.accelDir[0], dynamic.accelDir[1], dynamic.accelDir[2]);
+    if (first) {
+      char text[128];
+      std::snprintf(text, sizeof text, "base %08X: firmware %u, gravity %.3f %.3f %.3f", config.serial,
+                    unsigned(dynamic.firmwareVersion), dynamic.accelDir[0], dynamic.accelDir[1], dynamic.accelDir[2]);
+      Emit(SessionEventType::Log, "", text, LogLevel::Debug);
+    }
     const bool newChannel = dynamic.sobChannel >= 0 && base.dynamic.sobChannel != dynamic.sobChannel;
     base.config = config;
     base.dynamic = dynamic;
@@ -728,25 +748,6 @@ void SessionImpl::TakeKeyframes(Device& d) {
   for (auto& k : d.tracker->TakeKeyframes()) {
     std::optional<Eigen::Isometry3d> pose;
     if (const RoomBase* primary = room_.Base(k->primary)) pose = primary->worldFromBase * k->primaryFromDevice;
-    if (static const bool truth = std::getenv("LH_DEBUG_TRUTH") != nullptr; truth && pose) {
-      // Where each base's light alone puts the device, against the filter's pose then.
-      const auto model = models_.find(k->device);
-      for (const auto& [base, samples] : k->samples) {
-        const RoomBase* rb = room_.Base(base);
-        const auto b = bases_.find(base);
-        if (!rb || model == models_.end() || b == bases_.end() || b->second.config.cal.size() != 14) continue;
-        std::array<double, 14> cal;
-        std::copy(b->second.config.cal.begin(), b->second.config.cal.end(), cal.begin());
-        const auto solved = SolveFromBase(*k, base, *model->second, cal, b->second.config.model);
-        if (!solved) continue;
-        const Eigen::Isometry3d light = rb->worldFromBase * *solved;
-        const Eigen::Vector3d d = light.translation() - pose->translation();
-        std::fprintf(stderr, "TRUTH %s %.3f %08X primary %08X n %zu speed %.2f d %.1f %.1f %.1f mm |%.1f| rot %.2f deg\n",
-                     k->device.c_str(), now_, base, k->primary, samples.size(), k->speed, d.x() * 1e3, d.y() * 1e3,
-                     d.z() * 1e3, d.norm() * 1e3,
-                     Eigen::AngleAxisd(light.rotation().transpose() * pose->rotation()).angle() * 57.2958);
-      }
-    }
     if (keyframes_.Add(std::move(k), pose)) { newKeyframes_ = true; ++addedKeyframes_; }
   }
   if (!newKeyframes_ || !SolveDue()) return;
@@ -788,8 +789,7 @@ RoomSolveInput SessionImpl::SolveInput() {
 }
 
 void SessionImpl::ApplySolve(const RoomSolveOutput& out) {
-  if (std::getenv("LH_DEBUG_SOLVER")) Emit(SessionEventType::Log, "", "room solve: " + out.summary);
-  if (std::getenv("LH_DEBUG_ROOM_SPLIT") && out.ok) DebugSplit(out);
+  Emit(SessionEventType::Log, "", "room solve: " + out.summary, LogLevel::Debug);
   if (!out.ok || std::getenv("LH_EVALUATE_ROOM")) return;
   const uint32_t origin = room_.Origin();
   // A settled room: re-solving every second only burns CPU (up to 400 keyframes, two
@@ -810,11 +810,11 @@ void SessionImpl::ApplySolve(const RoomSolveOutput& out) {
   lastSolved_.clear();
   for (const auto& [serial, b] : out.bases) lastSolved_[serial] = b.worldFromBase;
   solveInterval_ = settled ? std::min(2 * solveInterval_, 4.0) : 1.0;
-  if (std::getenv("LH_DEBUG_SOLVER")) {
+  {
     char text[128];
     std::snprintf(text, sizeof text, "room solve: moved %.1f mm %.3f deg since last; next in %.0f s", worstMove * 1e3,
                   worstTurn * 57.2958, solveInterval_);
-    Emit(SessionEventType::Log, "", text);
+    Emit(SessionEventType::Log, "", text, LogLevel::Debug);
   }
   if (room_.OriginRelearning()) {
     const auto o = out.bases.find(origin);
@@ -825,7 +825,10 @@ void SessionImpl::ApplySolve(const RoomSolveOutput& out) {
     // With two, a knocked origin and a knocked other look alike; only the
     // accelerometers tell them apart.
     int others = 0, farOff = 0;  // (not `far`: a macro in the Windows headers)
+    bool locked = false;  // a locked room: only the origin's accelerometer says it was knocked
+    for (const auto& b : room_.Bases()) locked |= RoomMap::Locked(b);
     for (const auto& [serial, b] : out.bases) {
+      if (locked) break;
       if (serial == origin || b.keyframes <= 0 || !room_.Base(serial)) continue;
       ++others;
       farOff += room_.FarOff(serial, b.worldFromBase, b.positionVariance, b.rotationVariance);
@@ -839,47 +842,9 @@ void SessionImpl::ApplySolve(const RoomSolveOutput& out) {
   const uint32_t gauge = room_.OriginRelearning() ? room_.OriginGauge() : 0;  // held fixed by the solve
   for (const auto& [serial, b] : out.bases)
     if (serial != origin && serial != gauge && b.keyframes > 0)
-      room_.ApplySolved(serial, b.worldFromBase, b.positionVariance, b.rotationVariance, b.keyframes, b.rms, b.fresh);
+      room_.ApplySolved(serial, b.worldFromBase, b.positionVariance, b.rotationVariance, b.keyframes, b.rms, b.fresh,
+                          b.devices, b.span);
   CollectLogs(nullptr);
-}
-
-// Diagnostics: the room from subsets of the same keyframes (each device alone, slow and
-// fast ones). Where they disagree beyond their spread is a bias, not noise.
-void SessionImpl::DebugSplit(const RoomSolveOutput& all) {
-  const int added = addedKeyframes_;
-  const RoomSolveInput in = SolveInput();
-  addedKeyframes_ = added;
-  auto line = [&](const std::string& what, const std::vector<std::shared_ptr<const Keyframe>>& kfs) {
-    if (kfs.size() < 10) return;
-    RoomSolveInput sub = in;
-    sub.keyframes = kfs;
-    const RoomSolveOutput o = SolveRoom(sub);
-    std::string text = what + " (" + std::to_string(kfs.size()) + " kf):";
-    for (const auto& [serial, b] : o.bases) {
-      if (serial == in.origin || !all.bases.count(serial)) continue;
-      const Eigen::Vector3d d = b.worldFromBase.translation() - all.bases.at(serial).worldFromBase.translation();
-      const double r = Eigen::AngleAxisd(all.bases.at(serial).worldFromBase.rotation().transpose() *
-                                         b.worldFromBase.rotation()).angle();
-      char t[160];
-      std::snprintf(t, sizeof t, " %08X d=[%+.1f %+.1f %+.1f] mm %.2f deg rms %.0f urad", serial, d.x() * 1e3,
-                    d.y() * 1e3, d.z() * 1e3, r * 57.2958, b.rms * 1e6);
-      text += t;
-    }
-    std::fprintf(stderr, "split %s\n", text.c_str());
-  };
-  std::map<std::string, std::vector<std::shared_ptr<const Keyframe>>> byDevice;
-  std::vector<std::shared_ptr<const Keyframe>> slow, fast, early, late;
-  for (const auto& k : in.keyframes) {
-    byDevice[k->device].push_back(k);
-    (k->speed < 0.2 && k->rate < 0.5 ? slow : fast).push_back(k);
-  }
-  for (size_t i = 0; i < in.keyframes.size(); ++i) (i < in.keyframes.size() / 2 ? early : late).push_back(in.keyframes[i]);
-  std::fprintf(stderr, "split --- t=%.1f all %zu kf\n", now_, in.keyframes.size());
-  for (const auto& [dev, kfs] : byDevice) line(dev, kfs);
-  line("slow", slow);
-  line("fast", fast);
-  line("older half", early);
-  line("newer half", late);
 }
 
 void SessionImpl::SolverMain() {
@@ -949,6 +914,7 @@ DevicePose SessionImpl::MakePose(const Device& d) const {
   pose.angularVelocity = {out.angularVelocity.x(), out.angularVelocity.y(), out.angularVelocity.z()};
   pose.primaryBase = out.primary;
   pose.bases = out.bases;
+  pose.coverage = out.coverage;
   pose.updates = out.updates;
   pose.filterPosition = {out.filterPosition.x(), out.filterPosition.y(), out.filterPosition.z()};
   pose.filterTime = d.haveClock ? HostTime(d, out.filterTime) : now_;
@@ -1000,6 +966,8 @@ SessionSnapshot SessionImpl::Snapshot() const {
     s.positionVariance = rb.positionVariance;
     s.rotationVariance = rb.rotationVariance;
     s.origin = rb.origin;
+    s.locked = RoomMap::Locked(rb);
+    s.observations = std::max(rb.observations, rb.storedObservations);
   }
   for (auto& [serial, s] : bases)
     if (s.seen || s.known) snap.bases.push_back(s);

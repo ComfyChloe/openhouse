@@ -217,9 +217,9 @@ bool WirelessReportParser::DecodePacket(const uint8_t* pkt, int64_t* imuTicks) {
     }
     return false;
   }
-  if (!ok) return false;  // "WARNING: Malformed wireless packet"
+  if (!ok) return false;  // "dropped a malformed radio packet"
   if (pkt_.versionChange && version_ != pkt_.newVersion) {
-    version_ = pkt_.newVersion;  // "Transition to protocol version %d" — rest of packet dropped
+    version_ = pkt_.newVersion;  // "device switched to report protocol %d" — rest of packet dropped
     return true;
   }
   if (pkt_.hasImu) {

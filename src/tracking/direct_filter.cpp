@@ -130,31 +130,29 @@ bool DirectFilter::RejectCorrection(const Vec& dx) const {
     if (std::isnan(dx[i] - dx[i])) return true;
   auto d = [&](int i) { return i < dx.size() ? dx[i] : 0.0; };
   const double rot = std::sqrt(d(30) * d(30) + d(28) * d(28) + d(29) * d(29));
-  const bool debug = std::getenv("LH_DEBUG_REJECT") != nullptr;
-  if (kMaxImuRot < rot) { if (debug) fprintf(stderr, "REJECT imuRot %.6g\n", rot); return true; }
+  if (kMaxImuRot < rot) return true;
   bool skipTilt = false;
   if (updateCount < 0x105) {
-    if (kMaxGravMag < std::fabs(d(18))) { if (debug) fprintf(stderr, "REJECT gravMag %.6g\n", d(18)); return true; }
+    if (kMaxGravMag < std::fabs(d(18))) return true;
     if (updateCount < 0xc9) skipTilt = true;
   } else {
-    if (kMaxImuRotConverged < rot) { if (debug) fprintf(stderr, "REJECT imuRotConv %.6g\n", rot); return true; }
+    if (kMaxImuRotConverged < rot) return true;
     const double g = std::fabs(d(18));
-    if (kMaxGravMag < g) { if (debug) fprintf(stderr, "REJECT gravMag2 %.6g\n", g); return true; }
-    if (kMaxGravMagConverged < g) { if (debug) fprintf(stderr, "REJECT gravMagConv %.6g\n", g); return true; }
+    if (kMaxGravMag < g) return true;
+    if (kMaxGravMagConverged < g) return true;
   }
   if (!skipTilt && kMaxGravTilt < std::sqrt(d(16) * d(16) + d(17) * d(17))) {
-    if (debug) fprintf(stderr, "REJECT gravTilt\n");
     return true;
   }
   const double w2 = d(13) * d(13) + d(14) * d(14) + d(15) * d(15);
-  if (omegaCorrectionLimit2 <= w2) { if (debug) fprintf(stderr, "REJECT omega %.6g limit %.6g\n", w2, omegaCorrectionLimit2); return true; }
+  if (omegaCorrectionLimit2 <= w2) return true;
   for (int s = 0; s < 3; s++) {
     if (!altBaseActive[s]) continue;
     const int k = kAltBaseIndex[s];
     const double trans = std::sqrt(d(k + 2) * d(k + 2) + d(k) * d(k) + d(k + 1) * d(k + 1));
-    if (kMaxAltBaseTrans < trans) { if (debug) fprintf(stderr, "REJECT altTrans %.6g\n", trans); return true; }
+    if (kMaxAltBaseTrans < trans) return true;
     const double rotAlt = std::sqrt(d(k + 5) * d(k + 5) + d(k + 3) * d(k + 3) + d(k + 4) * d(k + 4));
-    if (kMaxAltBaseRot < rotAlt) { if (debug) fprintf(stderr, "REJECT altRot %.6g\n", rotAlt); return true; }
+    if (kMaxAltBaseRot < rotAlt) return true;
   }
   return false;
 }
@@ -275,16 +273,11 @@ bool DirectFilter::Update(const std::vector<Residual>& res, const Mat& R, const 
   // costs the extreme testswing capture (valid 94 -> 84 %), but without it a mid-game
   // fly-away in Beat Saber came back. Chosen for Beat Saber; live-tested there
   // 2026-10-22 (no fly-aways).
-  static const bool noFrameGate = std::getenv("LH_NO_FRAME_GATE") != nullptr;  // A/B: old behaviour
-  if (!noFrameGate && gate && gateSigma > 0 && updateCount >= 200 && opticalRows > 0 &&
+  if (gate && gateSigma > 0 && updateCount >= 200 && opticalRows > 0 &&
       2 * lastOutliers > opticalRows &&
       dx.size() >= 3 && dx.head<3>().norm() > kFrameRejectMove && frameRejectRun < kMaxFrameRejectRun) {
     ++frameRejectRun;
     ++rejectedFrames;
-    if (std::getenv("LH_DEBUG_UPDATE"))
-      fprintf(stderr, "FRAMEREJECT move %.1f cm rows %d outliers %d worst %.0f sigma held %d run %d updates %llu\n",
-              dx.head<3>().norm() * 100, opticalRows, lastOutliers, lastWorstSigma, int(holdSlowStates), frameRejectRun,
-              (unsigned long long)updateCount);
     return false;
   }
   frameRejectRun = 0;

@@ -19,6 +19,8 @@
 #include <string>
 #include <vector>
 
+#include "lh/log_level.hpp"
+
 namespace lh {
 
 struct Pose {
@@ -64,6 +66,10 @@ struct DevicePose {
   std::array<double, 3> angularVelocity{};  // world, rad/s
   uint32_t primaryBase = 0;     // base whose frame the filter runs in
   std::vector<uint32_t> bases;  // all bases in the filter
+  // Light used in the last 0.5 s, per base: frames and the mean sensors lit per frame
+  // (coverage: how well each base sees the device right now).
+  struct Coverage { uint32_t base = 0; int frames = 0; double sensors = 0; };
+  std::vector<Coverage> coverage;
   uint64_t updates = 0;         // optical updates since last (re)acquire
   // Diagnostics: the filter's own pose (last optical/inertial update, before the
   // output stage's prediction and smoothing) and its host time.
@@ -71,12 +77,13 @@ struct DevicePose {
   double filterTime = 0;
 };
 
-// Index ("Knuckles") controller input. Other devices report no input.
+// Controller input: Index ("Knuckles") controllers and Vive wands. Trackers report none.
 struct ControllerInput {
   double hostTime = 0;
   // Buttons (pressed).
   bool systemClick = false, aClick = false, bClick = false, triggerClick = false;
   bool thumbstickClick = false, trackpadTouch = false;
+  bool trackpadClick = false, gripClick = false, menuClick = false;  // Vive wand
   // Capacitive touch.
   bool systemTouch = false, aTouch = false, bTouch = false, triggerTouch = false, thumbstickTouch = false;
   double trigger = 0;                 // 0..1
@@ -88,10 +95,14 @@ struct ControllerInput {
   double fingerIndex = 0, fingerMiddle = 0, fingerRing = 0, fingerPinky = 0;
 };
 
+// Which controller a Controller is (from its config); decides its inputs and profile.
+enum class ControllerType { Index, ViveWand };
+
 struct DeviceInfo {
   std::string serial;           // "LHR-13DA81D1", or "LHB-A101B835" for bases
   DeviceRole role = DeviceRole::Tracker;
   std::string deviceClass;      // raw config device_class
+  ControllerType controllerType = ControllerType::Index;  // Controller role only
   std::string model, manufacturer, renderModel, controllerRole;  // "left_hand"/"right_hand"
   bool connected = false;
   bool enabled = true;          // disabled devices are listed but ignored entirely
@@ -113,6 +124,8 @@ struct BaseStationState {
   std::string channel;          // as its display shows it: "A" "b" "c", lhbs multi "1".."4"; "" unknown
   int faults = 0;
   bool origin = false;
+  bool locked = false;          // placed well: only its own accelerometer moves it now
+  int observations = 0;         // keyframes behind its pose (this session or saved)
 };
 
 struct DeviceState {
@@ -152,6 +165,7 @@ struct SessionEvent {
   SessionEventType type = SessionEventType::Log;
   std::string serial;           // device or base
   std::string text;
+  LogLevel level = LogLevel::Info;
 };
 
 struct SessionOptions {

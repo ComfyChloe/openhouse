@@ -26,8 +26,8 @@ scripts/build-windows.sh
 ```
 
 The system vcpkg executable initially had no ports checkout. The script uses
-`$LH_VCPKG_ROOT`, or a dedicated `$XDG_CACHE_HOME/lhdrvrw/vcpkg` checkout (default
-`~/.cache/lhdrvrw/vcpkg`). It installs the pinned `vcpkg.json` dependencies and test/
+`$LH_VCPKG_ROOT`, or a dedicated `$XDG_CACHE_HOME/openhouse/vcpkg` checkout (default
+`~/.cache/openhouse/vcpkg`). It installs the pinned `vcpkg.json` dependencies and test/
 viewer features for `x64-mingw-static`, then builds with up to 16 threads.
 `cmake/mingw-w64.cmake` prevents accidentally linking host Linux libraries.
 `OPENVR_INCLUDE_DIR` and `VCPKG_MAX_CONCURRENCY` can override the defaults.

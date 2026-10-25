@@ -65,7 +65,7 @@ write failure detection, and existing capture replay.
 flying, tracking churn, haptics, fingers), let the driver record while it runs:
 
 ```sh
-LH_CAPTURE=$HOME/lh-captures/vrchat-01 LH_VERBOSE=1 <start Monado / WiVRn / SteamVR as usual>
+LH_CAPTURE=$HOME/lh-captures/vrchat-01 LH_LOG_LEVEL=DEBUG <start Monado / WiVRn / SteamVR as usual>
 ```
 
 The variable has to reach the process that loads `driver_lighthouse.so` (the Monado /

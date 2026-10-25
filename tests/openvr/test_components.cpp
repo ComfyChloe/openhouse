@@ -1,3 +1,4 @@
+#include "common/test_paths.hpp"
 #include <array>
 #include <Eigen/Geometry>
 #include <gtest/gtest.h>
@@ -6,6 +7,13 @@
 #include "openvr/room_publisher.hpp"
 #include "openvr/host_frame.hpp"
 #include "openvr/haptic_routing.hpp"
+#include "openvr/telemetry_server.hpp"
+#include "common/net.hpp"
+#include "lh/log_level.hpp"
+#include <chrono>
+#include <nlohmann/json.hpp>
+#include <thread>
+#include <unistd.h>
 #include "transport/usb/haptics.hpp"
 #include <cmath>
 #include <cstdlib>
@@ -267,7 +275,7 @@ TEST(RawAlignment, KeepsSteamVRsFrameForSmallLevelDifferencesAndNeverDrifts) {
 }
 
 TEST(RawAlignment, PreservesHostFrameAcrossRoomRebuild) {
-  const std::string file = std::string(LH_SOURCE_DIR) + "/captures/session-20261016-142931Z-147083/lighthousedb.json";
+  const std::string file = TestCapture("session-20261016-142931Z-147083/lighthousedb.json");
   if (!std::filesystem::exists(file)) GTEST_SKIP();
   lh::openvr::RawAlignment alignment;
   std::string error;
@@ -416,4 +424,71 @@ TEST(Skeleton, ThumbReleasesAndGlidesBetweenButtons) {
   }
   EXPECT_LT(largest, 0.01f) << "the thumb snapped";
   EXPECT_LT((last - tip(hand.Evaluate(stick, false))).norm(), 2e-3f) << "settles on the stick";
+}
+
+TEST(Telemetry, ServesHelloBacklogStateAndLogsOnLoopback) {
+  lh::openvr::TelemetryServer server;
+  const int port = 36840 + 100 + int(::getpid() % 500);
+  std::string error;
+  ASSERT_TRUE(server.Start(port, "test-host", &error)) << error;
+  server.Log(1.0, lh::LogLevel::Warn, "LHR-1", "before the client");
+  lh::net::Socket s = lh::net::kInvalid;
+  for (int i = 0; i < 50 && s == lh::net::kInvalid; ++i) {
+    s = lh::net::ConnectLoopback(port);
+    if (s == lh::net::kInvalid) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  ASSERT_NE(s, lh::net::kInvalid);
+  auto readLines = [&](int want) {
+    std::vector<nlohmann::json> out;
+    std::string buf;
+    for (int i = 0; i < 200 && int(out.size()) < want; ++i) {
+      char chunk[4096];
+      const long n = lh::net::RecvSome(s, chunk, sizeof chunk);
+      if (n > 0) buf.append(chunk, size_t(n));
+      for (size_t nl; (nl = buf.find('\n')) != std::string::npos; buf.erase(0, nl + 1)) out.push_back(nlohmann::json::parse(buf.substr(0, nl)));
+      if (int(out.size()) < want) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return out;
+  };
+  auto first = readLines(2);
+  ASSERT_GE(first.size(), 2u);
+  EXPECT_EQ(first[0]["type"], "hello");
+  EXPECT_EQ(first[0]["host"], "test-host");
+  EXPECT_EQ(first[1]["type"], "log");
+  EXPECT_EQ(first[1]["level"], "WARN");
+  EXPECT_EQ(first[1]["text"], "before the client");
+  lh::SessionSnapshot snapshot;
+  lh::BaseStationState base;
+  base.serial = "LHB-D7B1AD76";
+  base.seen = base.known = true;
+  base.channel = "3";
+  base.positionVariance = 3 * 0.017 * 0.017;
+  snapshot.bases.push_back(base);
+  snapshot.roomId = "steamvr-1";
+  server.PublishState(2.0, snapshot, {}, {}, {false, 3, 0.005});
+  server.Log(2.1, lh::LogLevel::Debug, "", "[multi] chatter");
+  auto next = readLines(2);
+  ASSERT_GE(next.size(), 2u);
+  EXPECT_EQ(next[0]["type"], "state");
+  EXPECT_EQ(next[0]["room"]["epoch"], 3);
+  EXPECT_FALSE(next[0]["room"]["settled"].get<bool>());
+  EXPECT_NEAR(next[0]["bases"][0]["sigma"].get<double>(), 0.017, 1e-9);
+  EXPECT_EQ(next[0]["bases"][0]["channel"], "3");
+  EXPECT_EQ(next[1]["level"], "DEBUG");
+  lh::net::Close(s);
+  server.Stop();
+}
+
+TEST(LogLevels, ClassifiesAndParses) {
+  EXPECT_EQ(lh::ClassifyLog("LHR-1: [multi] multi: base X at relative slot 3"), lh::LogLevel::Debug);
+  EXPECT_EQ(lh::ClassifyLog("LHR-1: Resetting tracking: no optical samples for 2000ms"), lh::LogLevel::Warn);
+  EXPECT_EQ(lh::ClassifyLog("cannot open capture /x"), lh::LogLevel::Error);
+  EXPECT_EQ(lh::ClassifyLog("LHR-1 activated as tracker"), lh::LogLevel::Info);
+  lh::LogLevel l = lh::LogLevel::Info;
+  EXPECT_TRUE(lh::ParseLogLevel("DEBUG", &l));
+  EXPECT_EQ(l, lh::LogLevel::Debug);
+  EXPECT_TRUE(lh::ParseLogLevel("warning", &l));
+  EXPECT_EQ(l, lh::LogLevel::Warn);
+  EXPECT_FALSE(lh::ParseLogLevel("loud", &l));
+  EXPECT_STREQ(lh::LogLevelName(lh::LogLevel::Error), "ERR");
 }

@@ -45,12 +45,9 @@ void DeviceTracker::ResetFilter() {
   filter_ = std::make_unique<LighthouseDirect>(model_);
   // LH_STOCK_FILTER: the verified stock behaviour, for A/B comparisons.
   static const bool stock = std::getenv("LH_STOCK_FILTER") != nullptr;
-  predictOutput_ = !stock && !std::getenv("LH_NO_PREDICT");
-  smoothOutput_ = !stock && !std::getenv("LH_NO_SMOOTH");
-  holdStill_ = !stock && !std::getenv("LH_NO_HOLD");
-  inertialLag_ = stock || !predictOutput_ ? 0.02 : 0.12;
-  static const double gate = std::getenv("LH_GATE_SIGMA") ? std::atof(std::getenv("LH_GATE_SIGMA")) : kGateSigma;
-  if (!stock) filter_->SetImprovements(true, gate, !std::getenv("LH_NO_SWING"));  // LH_NO_SWING: A/B
+  predictOutput_ = smoothOutput_ = holdStill_ = !stock;
+  inertialLag_ = stock ? 0.02 : 0.12;
+  if (!stock) filter_->SetImprovements(true, kGateSigma, true);
   for (const auto& [serial, base] : bases_) filter_->OnBaseConfig(base.first, base.second);
   roomRevision_ = ~uint64_t{0};
   calibratedLogged_ = false;
@@ -115,50 +112,8 @@ void DeviceTracker::Process(std::vector<std::pair<BaseConfig, BaseDynamicState>>
   UpdateOutput();
 }
 
-namespace {
-// Diagnostics: LH_DEBUG_BUMP=SERIAL:SECONDS:DEGREES turns that base about its rotor-0
-// axis (vertical) by DEGREES from SECONDS after the device's first frame on, as a knock
-// on its mount does: every axis-0 sweep angle shifts by it.
-struct DebugBump { uint32_t serial = 0; double after = 0, radians = 0; };
-const DebugBump& Bump() {
-  static const DebugBump bump = [] {
-    DebugBump b;
-    const char* v = std::getenv("LH_DEBUG_BUMP");
-    unsigned serial = 0;
-    double after = 0, degrees = 0;
-    if (v && std::sscanf(v, "%x:%lf:%lf", &serial, &after, &degrees) == 3) b = {serial, after, degrees * M_PI / 180};
-    return b;
-  }();
-  return bump;
-}
-}  // namespace
-
 void DeviceTracker::HandleFrame(const OpticalFrame& original) {
-  const OpticalFrame* framePtr = &original;
-  OpticalFrame bumped;
-  if (const auto& bump = Bump(); bump.serial && original.baseSerial == bump.serial) {
-    if (firstFrameTime_ < -1e299) firstFrameTime_ = original.syncTime;
-    if (original.syncTime - firstFrameTime_ >= bump.after) {
-      bumped = original;
-      // A rigid turn about the base's y axis (Lh1Angle: a0 = atan2(-z, x), a1 =
-      // atan2(-z, -y)): a0 shifts by the turn, a1 follows the point's new depth.
-      for (auto& s : bumped.samples) {
-        if (s.axis == 0) {
-          bumpAxis0_[s.sensor] = s.angle;
-          s.angle += bump.radians;
-        } else if (const auto a0 = bumpAxis0_.find(s.sensor); a0 != bumpAxis0_.end()) {
-          const double depth = std::sin(a0->second + bump.radians) / std::sin(a0->second);
-          s.angle = std::atan2(depth * std::sin(s.angle), std::cos(s.angle));
-        }
-      }
-      framePtr = &bumped;
-    } else {
-      for (const auto& s : original.samples) if (s.axis == 0) bumpAxis0_[s.sensor] = s.angle;
-    }
-  } else if (bump.serial && firstFrameTime_ < -1e299 && original.baseSerial) {
-    firstFrameTime_ = original.syncTime;
-  }
-  const OpticalFrame& frame = *framePtr;
+  const OpticalFrame& frame = original;
   const bool wasTracking = filter_->Bootstrapped();
 
   if (frame.baseSerial) lastFrame_[frame.baseSerial] = frame.syncTime;
@@ -208,7 +163,6 @@ void DeviceTracker::HandleFrame(const OpticalFrame& original) {
       }
     }
   }
-  const uint64_t updatesBefore = filter_->Filter().updateCount;
   const int rejectsBefore = filter_->Filter().rejectCount;
   const double lastOpticalBefore = filter_->LastOpticalTime();
   filter_->OnFrame(frame);
@@ -231,17 +185,6 @@ void DeviceTracker::HandleFrame(const OpticalFrame& original) {
     auto& recent = recentUsed_[frame.baseSerial];
     recent.push_back({frame.syncTime, int(lit.size())});
     while (!recent.empty() && recent.front().first < frame.syncTime - 2) recent.pop_front();
-  }
-  if (static const bool vis = std::getenv("LH_DEBUG_VIS") != nullptr; vis && frame.baseSerial) {
-    // Per frame: distinct sensors lit, whether the filter used it, and why not.
-    std::set<int> sensors;
-    for (const auto& s : frame.samples) if (s.sensor >= 0) sensors.insert(s.sensor);
-    bool inFilter = false;
-    for (int slot = 0; slot < 4; ++slot) inFilter |= filter_->BaseSerial(slot) == frame.baseSerial;
-    std::fprintf(stderr, "VIS %s %.4f %08X %d %zu %d %d %d %d %d %.4f\n", id_.c_str(), frame.syncTime, frame.baseSerial, frame.axis,
-                 sensors.size(), int(wasTracking), int(filter_->Filter().updateCount != updatesBefore),
-                 int(filter_->LastOpticalTime() != lastOpticalBefore), int(filter_->Filter().rejectCount != rejectsBefore), int(inFilter),
-                 Now() - frame.syncTime);
   }
   if (!wasTracking && filter_->Bootstrapped()) OnAcquired();
   CollectKeyframe(frame);
@@ -455,10 +398,6 @@ void DeviceTracker::SyncRoom() {
       const auto [known, inserted] = altEpochs_.try_emplace(e.serial, epochs);
       const bool replaced = !inserted && known->second != epochs;
       known->second = epochs;
-      if (std::getenv("LH_DEBUG_ALTSYNC") && streak >= kRejectStreak / 2)
-        std::fprintf(stderr, "ALTSYNC %s %.2f primary %08X alt %08X streaks %d %d dp %.1f mm dr %.2f deg room %.1f mm filter %.1f mm\n",
-                     id_.c_str(), filter_->Time(), primary, e.serial, streak0, streak1, dp * 1e3, dr * 57.2958,
-                     roomSigma * 1e3, std::sqrt(e.translationVariance / 3) * 1e3);
       bool apply;
       if (replaced) {
         apply = dp > 0.002 || dr > 0.0005;
@@ -576,7 +515,7 @@ void DeviceTracker::CheckHealth() {
       const RoomBase* from = room_->Base(primary);
       const RoomBase* to = room_->Base(visible);
       std::optional<LighthouseDirect::Seed> seed;
-      if (from && to && carry_ && !std::getenv("LH_NO_REBASE")) {
+      if (from && to && carry_) {
         const Eigen::Isometry3d toFromPrimary = to->worldFromBase.inverse() * from->worldFromBase;
         LighthouseDirect::Seed s;
         s.base = visible;
@@ -641,6 +580,12 @@ TrackerOutput DeviceTracker::RawOutput() const {
   out.primary = filter_->BaseSerial(0);
   for (int slot = 0; slot < 4; ++slot)
     if (filter_->BaseSerial(slot)) out.bases.push_back(filter_->BaseSerial(slot));
+  for (const auto& [base, recent] : recentUsed_) {
+    DevicePose::Coverage c{base, 0, 0};
+    for (const auto& [t, sensors] : recent)
+      if (Now() - t < 0.5) { ++c.frames; c.sensors += sensors; }
+    if (c.frames) { c.sensors /= c.frames; out.coverage.push_back(c); }
+  }
   out.updates = f.updateCount - std::min(f.updateCount, updatesAtAcquire_);
   const RoomBase* base = room_->Base(out.primary);
   if (!base) {
@@ -751,9 +696,7 @@ void DeviceTracker::UpdateOutput() {
     lastOpticalSeen_ = filter_->LastOpticalTime();
     lastOpticalTaken_ = Now();
   }
-  static const bool byLightTime = std::getenv("LH_DARK_BY_LIGHT_TIME") != nullptr;  // old behaviour (A/B)
-  const double dark = byLightTime ? Now() - filter_->LastOpticalTime()
-                                  : std::min(Now() - filter_->LastOpticalTime(), Now() - lastOpticalTaken_);
+  const double dark = std::min(Now() - filter_->LastOpticalTime(), Now() - lastOpticalTaken_);
   // A lone multi-station base sweeps every N revolutions (66 ms at N = 4): that is
   // not darkness yet.
   if (dark > std::max(kCoastAfter, 1.25 * sweepInterval_)) {
@@ -792,12 +735,6 @@ void DeviceTracker::TrackStillness(const ImuSample& s) {
   if (moving) { quietSince_.reset(); still_ = false; }
   else if (quiet && !quietSince_) quietSince_ = s.time;
   if (quietSince_ && s.time - *quietSince_ > kSettle) still_ = true;
-  if (std::getenv("LH_DEBUG_STILL")) {
-    static thread_local int n = 0;
-    static thread_local double g = 0, gm = 0, am = 0, st = 0;
-    g += gyro; gm = std::max(gm, gyro); am = std::max(am, accel); st += still_;
-    if (++n == 250) { std::fprintf(stderr, "%s still: gyro mean %.4f max %.4f accel dev max %.4f still %.0f%%\n", id_.c_str(), g / n, gm, am, 100 * st / n); n = 0; g = gm = am = st = 0; }
-  }
 }
 
 std::vector<std::string> DeviceTracker::TakeLogs() {

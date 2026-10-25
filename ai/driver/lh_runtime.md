@@ -111,7 +111,7 @@ room (variance ~1e-6) measurably increased static jitter on the recorded control
 (OOTX gravity, within ~0.5° of the calibrated tilt), then re-levelled once a calibrated
 filter's tilt variance is clearly lower (it moved 0.14–0.99° on the recordings).
 
-Diagnostics: `LH_DEBUG_SOLVER=1` logs every solve; `LH_EVALUATE_ROOM=1` freezes the
+Diagnostics: every solve is logged at DEBUG level (`room solve: ...`); `LH_EVALUATE_ROOM=1` freezes the
 room (no learning at all) and reports how well it explains the data (residual RMS
 with the bases held fixed).
 

@@ -95,6 +95,7 @@ bool RoomMap::Load(const std::string& path, std::string* error) {
         base.positionVariance = b.value("positionVariance", 1e-4);
         base.rotationVariance = b.value("rotationVariance", 1e-4);
         base.observations = b.value("observations", 0);
+        base.storedObservations = base.observations;
         base.origin = b.value("origin", false);
         // A base the room solver placed from many keyframes in an earlier session:
         // the next session's first solves (a keyframe or two) refine it gently instead
@@ -261,7 +262,12 @@ bool RoomMap::ImportSteamDatabase(const std::string& text, std::string* error) {
 
 // A base (or the origin) power cycled since the room was stored: its pose is kept, with
 // the weight of a few seconds of keyframes and at least 1 cm of uncertainty.
+bool RoomMap::Locked(const RoomBase& b) {
+  return !b.origin && !b.relearn && std::max(b.observations, b.storedObservations) >= 100;
+}
+
 void RoomMap::Suspect(RoomBase& b) {
+  if (Locked(b)) return;  // asleep and woken (new reset count) is not moved: its accelerometer tells
   constexpr int kSuspectEvidence = 30;
   b.observations = std::min(b.observations, kSuspectEvidence);
   b.positionVariance = std::max(b.positionVariance, 3 * 0.01 * 0.01);
@@ -272,11 +278,16 @@ void RoomMap::OnBaseSeen(const BaseConfig& config, const BaseDynamicState& dynam
   const uint32_t serial = config.serial;
   const auto previousConfig = configs_.find(serial);
   if (previousConfig == configs_.end() || previousConfig->second.first.cal != config.cal) dirty_ = true;
+  const bool firstSighting = !seenResetCount_.count(serial);
+  std::optional<Eigen::Vector3d> saved;  // the gravity this base had when the room was saved
+  if (firstSighting && previousConfig != configs_.end()) {
+    const auto& g = previousConfig->second.second.accelDir;
+    if (Eigen::Vector3d(g[0], g[1], g[2]).norm() > 0.5) saved = Eigen::Vector3d(g[0], g[1], g[2]).normalized();
+  }
   configs_[serial] = {config, dynamic};
   const int resetCount = dynamic.sysUnlockCount;
-  const bool firstSighting = !seenResetCount_.count(serial);
   seenResetCount_[serial] = resetCount;
-  CheckAccel(serial, dynamic);
+  CheckAccel(serial, dynamic, saved ? &*saved : nullptr);
 
   if (!firstSighting) return;
   // Choose the room: keep the active one if it has this base or other visible bases.
@@ -341,19 +352,15 @@ void RoomMap::OnBaseSeen(const BaseConfig& config, const BaseDynamicState& dynam
 
 // Once a session, when the origin is first seen: its own accelerometer (OOTX) against
 // the room's level. A stored room (imported from SteamVR, or saved by an earlier
-// session) keeps the tilt the origin had then. Moved since (remounted, stood upright on
-// a desk, ...), it leaves the whole room tilted, and the filter can't right it: the
-// stored tilt's variance is SteamVR's, far below what a filter estimate reaches
-// (RefineOriginTilt). More than kRelevelRad off: re-levelled from the accelerometer
-// (the smallest turn, the room's yaw kept), with the accelerometer's variance so that
-// the filter refines it from there. A new reset count on the origin also means the
-// others' places relative to it are suspect: they are relearned.
+// session) keeps the tilt the origin had then. More than kStaleRad off, the origin was
+// turned since (remounted, stood upright on a desk, ...) and the stored layout around
+// it is stale too: true, and the caller learns a new room. A new reset count on the
+// origin means the others' places relative to it are suspect: they are relearned.
 bool RoomMap::LevelOrigin(Room& room, RoomBase& origin, const BaseDynamicState& dynamic) {
   // Below this the base's accelerometer is not better than the stored level: Valve's
   // accelerometers are off by a few degrees (live: 2.6 deg, undone by the devices'
   // own gravity a second later, a 17 cm jump of every device). Gross moves only.
-  constexpr double kRelevelRad = 8.0 * 0.017453292519943295;
-  constexpr double kAccelTiltVariance = 1.5e-4;  // as EstablishOrigin from the accelerometer
+  constexpr double kStaleRad = 8.0 * 0.017453292519943295;
   const int resetCount = dynamic.sysUnlockCount;
   if (origin.resetCount && *origin.resetCount != resetCount) {  // power cycled: see OnBaseSeen
     for (auto& [s, b] : room.bases)
@@ -365,38 +372,15 @@ bool RoomMap::LevelOrigin(Room& room, RoomBase& origin, const BaseDynamicState& 
   if (up.norm() < 0.5) return false;  // no accelerometer reading
   const Eigen::Vector3d upWorld = origin.worldFromBase.rotation() * up.normalized();
   const double off = std::acos(std::clamp(upWorld.y(), -1.0, 1.0));
-  if (off <= kRelevelRad) return false;
-  // The origin really turned (live, lhbs: A101B835 upright one day, tilted 50-60 deg
-  // on others, readings consistent within each session): the stored layout around it
-  // is stale too. Re-levelling kept that layout, and every device fought it (the
-  // headset reset every 4 s, flew between bases). Learned afresh instead (the stored
-  // room is kept, unused); LH_RELEVEL_FROM_BASE=1: re-level as before.
-  if (!std::getenv("LH_RELEVEL_FROM_BASE")) {
-    char text[200];
-    std::snprintf(text, sizeof text,
-                  "Room %s is stale: origin %08X turned %.1f deg since it was saved; learning a new room",
-                  room.id.c_str(), origin.serial, off * 57.29577951308232);
-    Log(text);
-    return true;
-  }
-  const Eigen::Matrix3d delta = Eigen::Quaterniond::FromTwoVectors(upWorld, Eigen::Vector3d::UnitY()).toRotationMatrix();
-  for (auto& [s, b] : room.bases) {
-    b.worldFromBase.linear() = delta * b.worldFromBase.rotation();
-    b.worldFromBase.translation() = delta * b.worldFromBase.translation();
-  }
-  for (auto& [s, target] : solvedTarget_) {  // as RefineOriginTilt
-    target.linear() = delta * target.rotation();
-    target.translation() = delta * target.translation();
-  }
-  origin.rotationVariance = std::max(origin.rotationVariance, kAccelTiltVariance);
+  if (off <= kStaleRad) return false;
+  // Live, lhbs: A101B835 upright one day, tilted 50-60 deg on others. Re-levelling
+  // kept the stale layout, and every device fought it (the headset reset every 4 s and
+  // flew between bases). The stored room is kept, unused.
   char text[200];
-  std::snprintf(text, sizeof text,
-                "Re-levelled room %s by %.1f deg: origin %08X's accelerometer disagrees with the stored level "
-                "(moved since the room was saved?) (accel %.3f %.3f %.3f)",
-                room.id.c_str(), off * 57.29577951308232, origin.serial, up.x(), up.y(), up.z());
+  std::snprintf(text, sizeof text, "Room %s is stale: origin %08X turned %.1f deg since it was saved; learning a new room",
+                room.id.c_str(), origin.serial, off * 57.29577951308232);
   Log(text);
-  Changed();
-  return false;
+  return true;
 }
 
 void RoomMap::SetOotxFrame(uint32_t serial, const std::vector<uint8_t>& frame) {
@@ -500,27 +484,21 @@ void RoomMap::Observe(const std::string& device, uint32_t primary, uint32_t alt,
     mpv = a->second.positionVariance + positionVariance;
     mrv = a->second.rotationVariance + rotationVariance;
   }
+  if (Locked(*target)) return;
   const double dp = (measured.translation() - target->worldFromBase.translation()).norm();
   const double dr = Angle(measured.rotation(), target->worldFromBase.rotation());
   const bool uncertain = target->positionVariance > 0.01;
   if (!uncertain && (dp > 0.10 || dr > 0.0523599)) {
     if (++target->inconsistent >= 10) {
       char text[200];
-      static const bool steps = std::getenv("LH_ROOM_STEPS") != nullptr;  // old behaviour (A/B)
-      std::snprintf(text, sizeof text, "Base %08X disagrees with the room map by %.0fmm / %.1f deg; relearning it%s",
-                    target->serial, dp * 1000, dr * 57.29577951308232, steps ? "" : " (solver re-solves it)");
+      std::snprintf(text, sizeof text, "Base %08X disagrees with the room map by %.0fmm / %.1f deg; relearning it (solver re-solves it)",
+                    target->serial, dp * 1000, dr * 57.29577951308232);
       Log(text);
-      if (steps) {
-        target->worldFromBase = measured;
-        target->positionVariance = mpv;
-        target->rotationVariance = mrv;
-      } else {
-        // One device's filter (a drifting or occluded one: live, a headset 4-5 deg off)
-        // must not rewrite the room on its own: the base stays, uncertain, and the
-        // solver places it again from every device's fresh keyframes, gliding there.
-        target->positionVariance = std::max(target->positionVariance, 0.02);
-        target->rotationVariance = std::max(target->rotationVariance, 0.0523599 * 0.0523599);
-      }
+      // One device's filter (a drifting or occluded one: live, a headset 4-5 deg off)
+      // must not rewrite the room on its own: the base stays, uncertain, and the
+      // solver places it again from every device's fresh keyframes, gliding there.
+      target->positionVariance = std::max(target->positionVariance, 0.02);
+      target->rotationVariance = std::max(target->rotationVariance, 0.0523599 * 0.0523599);
       target->inconsistent = 0;
       target->solved = false;
       relearned_.push_back(target->serial);
@@ -571,12 +549,18 @@ bool RoomMap::FarOff(uint32_t serial, const Eigen::Isometry3d& pose, double pv, 
 // Every decoded OOTX frame carries the base's gravity direction (lhbs refreshes it in
 // the frame; stock only at power-up). Turned by more than kBumpRad, twice running (two
 // frames, or two devices decoding one): knocked.
-void RoomMap::CheckAccel(uint32_t serial, const BaseDynamicState& dynamic) {
+void RoomMap::CheckAccel(uint32_t serial, const BaseDynamicState& dynamic, const Eigen::Vector3d* saved) {
   const Eigen::Vector3d up(dynamic.accelDir[0], dynamic.accelDir[1], dynamic.accelDir[2]);
   if (dynamic.cached || up.norm() < 0.5) return;  // a recalled frame: an earlier session's gravity
   AccelTrack& a = accel_[serial];
   const Eigen::Vector3d u = up.normalized();
-  if (!a.has) { a.ref = u; a.has = true; return; }
+  if (!a.has) {
+    // Against the saved gravity first: a base moved while nothing ran is bumped on its
+    // first live frames (twice running, as any bump).
+    a.ref = saved ? *saved : u;
+    a.has = true;
+    if (!saved) return;
+  }
   const double angle = std::acos(std::clamp(a.ref.dot(u), -1.0, 1.0));
   if (angle <= kBumpRad) {
     a.strikes = 0;
@@ -652,7 +636,7 @@ void RoomMap::ApplyOriginSolved(const Eigen::Isometry3d& pose, double pv, int ke
 }
 
 void RoomMap::ApplySolved(uint32_t serial, const Eigen::Isometry3d& pose, double pv, double rv, int keyframes,
-                          double rms, int fresh) {
+                          double rms, int fresh, int devices, double span) {
   constexpr int kMaxEvidence = 100000;
   // 1 mm per axis: what model errors leave, and what keeps a settled room following a
   // base that really shifted a little (a 1 cm shift is half taken in a few minutes).
@@ -675,6 +659,7 @@ void RoomMap::ApplySolved(uint32_t serial, const Eigen::Isometry3d& pose, double
     place = true;
   }
   auto& b = found->second;
+  if (Locked(b)) return;
   const Eigen::Isometry3d now = solvedTarget_.count(serial) ? solvedTarget_[serial] : b.worldFromBase;
   const double dp = (now.translation() - pose.translation()).norm();
   const double dr = Eigen::AngleAxisd(now.rotation().transpose() * pose.rotation()).angle();
@@ -723,7 +708,7 @@ void RoomMap::ApplySolved(uint32_t serial, const Eigen::Isometry3d& pose, double
     // A knock (20 cm, 3 deg) is taken at once: light against the old place is wrong.
     // Less (an imported room's error, a slow drift) glides there, as every other solve:
     // a step moves every device on this base at once (live: a 10 cm head shift).
-    const bool knock = dp > 0.20 || dr > 0.0523599 || std::getenv("LH_ROOM_STEPS");
+    const bool knock = dp > 0.20 || dr > 0.0523599;
     std::snprintf(text, sizeof text, "Room solver: base %08X moved by %.1f mm, %.2f deg (%d keyframes, rms %.0f urad, sigma %.1f mm)%s",
                   serial, dp * 1000, dr * 57.29577951308232, keyframes, rms * 1e6, std::sqrt(pv / 3) * 1000,
                   knock ? "" : "; gliding there");

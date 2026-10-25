@@ -4,7 +4,7 @@ set -euo pipefail
 repo=$(cd "$(dirname "$0")/.." && pwd)
 # Dedicated checkout; deliberately not $VCPKG_ROOT (a system vcpkg checkout may lack
 # the pinned baseline). Override with LH_VCPKG_ROOT.
-root=${LH_VCPKG_ROOT:-${XDG_CACHE_HOME:-$HOME/.cache}/lhdrvrw/vcpkg}
+root=${LH_VCPKG_ROOT:-${XDG_CACHE_HOME:-$HOME/.cache}/openhouse/vcpkg}
 command -v x86_64-w64-mingw32-g++ >/dev/null || { echo 'Install MinGW-w64 first' >&2; exit 1; }
 if [[ ! -f "$root/scripts/buildsystems/vcpkg.cmake" ]]; then
   git clone https://github.com/microsoft/vcpkg.git "$root"
