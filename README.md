@@ -160,7 +160,7 @@ Each device has a Kalman filter that tracks its position, rotation, speed, IMU c
 
 The room is every basestation's position, and it's shared by every device. When a device sees 2 or more basestations at the same time, it saves a "keyframe". About once a second, every basestation gets placed together from all the keyframes of all the devices. The room then slowly gets built. After a successful room learning (which generally takes around 30 or so seconds), the room map is saved, so next sessions starts with that learned room map
 
-Once a basestation has enough keyframes, it gets **locked**, and devices can't move it anymore. Only a basestation that has been moved around (which is detected by the accelerometer of the basestation) gets relearned. If the main basestation was turned, the old room is out of date, so a new room gets learned instead. The room is **ready** (settled) once every basestation you can see is placed within 5 mm.
+Once a basestation has enough keyframes, it gets locked, and devices can't move it anymore. Only a basestation that has been moved around (which is detected by the accelerometer of the basestation) gets relearned. If the main basestation was turned, the old room is out of date, so a new room gets learned instead. The room is ready (settled) once every basestation you can see is placed within 5 mm.
 
 openhouse tracks the headset itself, but the display part (lens distortion, display modes) comes from SteamVR's own driver, which gets loaded only for the headset's display.
 
