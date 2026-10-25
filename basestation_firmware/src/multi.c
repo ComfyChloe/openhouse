@@ -43,6 +43,9 @@ static volatile uint8_t pending, pending_set;   /* slave: decoded, taken at its 
 
 /* master */
 static volatile uint32_t seen_ms[MULTI_SLOTS];
+#define MASTER_RECENT_MS 100
+static volatile uint32_t blind_sweeps;  /* turns swept without this revolution's master flash */
+static uint32_t blind_rev = 0xFFFFFFFFu;
 static uint8_t candidate, announced = 1;
 static uint32_t candidate_since;
 static volatile uint16_t announced_at;  /* ootx_frames_sent() when announced */
@@ -66,13 +69,19 @@ bool multi_sweeps_in(uint32_t rev)
     const uint8_t s = MC->slot, m = mask_live;
     if (!(m & (1u << s))) return false;
     if (s != 0 && (!mask_known || guard)) return false;
-    /* a slave also needs this revolution's evidence: the master's flash, saying it
-     * doesn't sweep, and no earlier slot's saying it does. A missed round change
-     * (whose telltale, the master's sweeping flash, may be the flash missed) can't
-     * make two stations sweep together. */
-    if (s != 0 && (!ev_master_skip || ev_earlier_sweep)) return false;
+    /* a slave also needs this revolution's evidence: no earlier slot's flash saying it
+     * sweeps, and the master's flash saying it doesn't. A station that sees the master
+     * badly (89AE90F2 as slot 4 missed its turn 1 in 6 times) may do without the latter
+     * while it saw the master within the last 100 ms (6 revolutions): it is still phase
+     * locked (the timebase stops emission otherwise), and a round change it missed in
+     * that window is what the earlier-slot check and the next frame's guard catch. */
+    if (s != 0 && ev_earlier_sweep) return false;
+    const bool blind = s != 0 && !ev_master_skip;
+    if (blind && (!seen_ms[0] || sys_ms() - seen_ms[0] >= MASTER_RECENT_MS)) return false;
     int rank = popcount4(m & ((1u << s) - 1));
-    return (int)(rev % (uint32_t)multi_count()) == rank;
+    const bool mine = (int)(rev % (uint32_t)multi_count()) == rank;
+    if (mine && blind && rev != blind_rev) { blind_rev = rev; blind_sweeps++; }
+    return mine;
 }
 
 static volatile bool round_changed;     /* slave: rebuild the OOTX frame (main loop) */
@@ -247,6 +256,7 @@ uint8_t  multi_mask_live(void) { return mask_live; }
 uint8_t  multi_mask_announced(void) { return MC->slot == 0 ? announced : mask_live; }
 bool     multi_mask_known(void) { return MC->slot == 0 || mask_known; }
 uint8_t  multi_guard(void) { return guard; }
+uint32_t multi_blind_sweeps(void) { return blind_sweeps; }
 uint32_t multi_seen_age_ms(int slot) { return seen_ms[slot] ? sys_ms() - seen_ms[slot] : 0xFFFFFFFFu; }
 uint32_t multi_frames_decoded(void) { return frames_ok; }
 uint32_t multi_frames_bad(void) { return frames_bad; }

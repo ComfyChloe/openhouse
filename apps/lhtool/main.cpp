@@ -266,6 +266,8 @@ int SessionCommand(int argc, char** argv) {
                           {"position", p.worldFromImu.position}, {"orientation", p.worldFromImu.orientation},
                           {"velocity", p.velocity}, {"primaryBase", p.primaryBase}, {"bases", p.bases}};
       if (d.info.batteryPercent) j["battery"] = *d.info.batteryPercent;
+      // Light per base over the last 0.5 s: [base, frames, sensors per frame].
+      for (const auto& c : p.coverage) j["coverage"].push_back({c.base, c.frames, c.sensors});
       if (d.input) {
         const auto& in = *d.input;
         j["input"] = {{"trigger", in.trigger}, {"grip", in.gripForce}, {"stick", {in.thumbstickX, in.thumbstickY}},

@@ -190,6 +190,13 @@ int main(int argc, char **argv)
     drop_bits = 0;
     run(&r, 60 * 10);
     expect_round("slot 2 back, lossy", 0xF);
+    /* slaves missing a third of the master's flashes keep their turns: still locked,
+     * the master seen moments ago, so they sweep without that revolution's flash */
+    drop_bits = 0.3;
+    memset(sweeps_total, 0, sizeof sweeps_total);
+    run(&r, 600);
+    drop_bits = 0;
+    for (int i = 0; i < 4; i++) CHECK(sweeps_total[i] >= 140 && sweeps_total[i] <= 160, "lossy: station %d swept %d of 600", i + 1, sweeps_total[i]);
 
     /* a slave that can't see the master's data: never sweeps */
     st[3].sees_master = false;

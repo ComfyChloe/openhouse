@@ -56,6 +56,7 @@ uint8_t  multi_mask_announced(void);
 bool     multi_mask_known(void);
 uint8_t  multi_guard(void);
 uint32_t multi_seen_age_ms(int slot);
+uint32_t multi_blind_sweeps(void); /* turns swept without that revolution's master flash */
 uint32_t multi_frames_decoded(void);
 uint32_t multi_frames_bad(void);
 uint32_t multi_frames_wrong(void);    /* slave: decoded a slave's frame as the master's */

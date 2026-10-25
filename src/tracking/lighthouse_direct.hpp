@@ -18,6 +18,7 @@ namespace lh {
 
 class LighthouseDirect {
  public:
+  static constexpr double kSaturatedJerkScale = 10;  // process noise while the accelerometer saturates
   explicit LighthouseDirect(TrackedObjectModel model, double opticalTimeout = 0.5);
   // Not stock, off by default (the oracle tests compare against the original):
   // multi-start acquisition (solver::SolveMultiStart) and per-row innovation gating
@@ -136,6 +137,7 @@ class LighthouseDirect {
   double diameter_ = 0, radius_ = 0;
   bool calibrationSeen_ = false;  // filter_.flags & 0x100
   size_t primarySwitches_ = 0, secondaryBases_ = 0;
+  uint64_t altGateUntil_ = 0;  // after a reseed: the other bases' light isn't frame-gated before this
 };
 
 }  // namespace lh

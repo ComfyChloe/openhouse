@@ -13,7 +13,8 @@
 //     within 1 ms form an index-event group (one every half revolution).
 //  2. A reference (the master's flash time) is predicted every half period; each flash
 //     gets slot round((t - ref) / 250 us). The reference re-anchors to an earlier
-//     station if one shows up before it, so slot 0 is always the earliest (the master).
+//     station once one keeps showing up before it, so slot 0 is the earliest (the
+//     master); a station's OOTX slot, once decoded, corrects the numbering.
 //  3. Each station (slot) decodes its own OOTX from its own flashes. A station that
 //     flashes every index event (master, or policy ALL) pushes "no data" when it is
 //     missed, as stock does.
@@ -107,6 +108,14 @@ class MultiDisambiguator {
   int64_t halfIndex_ = 0;
   int stationCount_ = 0;
   int unmatched_ = 0;  // consecutive groups with no flash on the slot grid
+  // Re-anchoring to an earlier station: only once it showed up in most recent groups (a
+  // stray early pulse in fast motion moved every slot for good, and pushed real stations
+  // past the last slot). earlyGroups_: the last 64 groups, 1 = had an earlier flash.
+  std::deque<uint8_t> earlyGroups_;
+  // A decoded station whose OOTX slot differs from its relative one: shift by this at the
+  // next group (0 = none).
+  int pendingShift_ = 0;
+  void ShiftSlots(int delta);
   bool policyAll_ = false;  // from an OOTX mode byte  // N; 0 until known  // half revolutions since the first reference
 
   Station stations_[kMaxSlots];

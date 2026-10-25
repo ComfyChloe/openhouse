@@ -1,6 +1,7 @@
 #include "disambiguator_multi.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -105,10 +106,28 @@ void MultiDisambiguator::Detect(const std::vector<Flash>& flashes) {
   }
 }
 
+// Moves every station by `delta` slots (slot s becomes s + delta); stations pushed out of
+// range are dropped. Slot 0's time moves with it.
+void MultiDisambiguator::ShiftSlots(int delta) {
+  if (delta == 0) return;
+  std::array<Station, kMaxSlots> moved{};
+  for (int s = 0; s < kMaxSlots; ++s)
+    if (s + delta >= 0 && s + delta < kMaxSlots) moved[s + delta] = std::move(stations_[s]);
+  for (int s = 0; s < kMaxSlots; ++s) stations_[s] = std::move(moved[s]);
+  if (ref_ != 0) ref_ -= delta * kStagger;
+}
+
 void MultiDisambiguator::CloseGroup() {
   std::vector<Flash> flashes;
   flashes.swap(group_);
   Detect(flashes);
+  if (pendingShift_) {
+    char buf[112];
+    snprintf(buf, sizeof buf, "multi: slots renumbered by %d to match the stations' own OOTX slots\n", pendingShift_);
+    Log(buf);
+    ShiftSlots(pendingShift_);
+    pendingShift_ = 0;
+  }
   const double half = 0.5 * period_;
   double pred;
   int64_t steps = 0;
@@ -149,8 +168,18 @@ void MultiDisambiguator::CloseGroup() {
   } else {
     unmatched_ = 0;
   }
+  earlyGroups_.push_back(minSlot < 0);
+  if (earlyGroups_.size() > 64) earlyGroups_.pop_front();
+  int early = 0;
+  for (uint8_t e : earlyGroups_) early += e;
+  if (minSlot < 0 && early < 30) {
+    // Not (yet) a station: a stray pulse. Its flashes are ignored, nothing moves.
+    for (auto& s : slots) if (s < 0) s = -100;
+    minSlot = 0;
+  }
   if (minSlot < 0) {
     const int shift = -minSlot;
+    earlyGroups_.clear();
     for (int s = kMaxSlots - 1; s >= 0; --s)
       stations_[s] = s >= shift ? std::move(stations_[s - shift]) : Station{};
     for (auto& s : slots) if (s != -100) s += shift;
@@ -361,6 +390,8 @@ void MultiDisambiguator::PushOotx(Station& st, int slot, int bit) {
     st.multiN = dyn.multiN;
     st.multiSlot = dyn.multiSlot;
     if (dyn.multiN >= 2) stationCount_ = dyn.multiN;
+    if (dyn.multi && dyn.multiSlot != slot && dyn.multiSlot >= 0 && dyn.multiSlot < kMaxSlots)
+      pendingShift_ = dyn.multiSlot - slot;
     if (dyn.multiAll) policyAll_ = true;
     if (learned_.size() < 8) learned_.push_back({cfg, dyn, ring.Bits()});
     ring.Reset();

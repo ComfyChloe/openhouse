@@ -648,6 +648,12 @@ void RoomMap::ApplySolved(uint32_t serial, const Eigen::Isometry3d& pose, double
   if (fresh < 0) fresh = keyframes;
   char text[220];
   bool place = false;
+  // A base is first placed from at least this many keyframes. From one (taken mid-swing
+  // in a new room) it was 1.3 m off, devices took it from the map and flew off, and it
+  // was moved 1.4 m and 25 deg a few seconds later. Learning a room from scratch,
+  // fastmotionindex's jumps > 5 cm 92 -> 28, spin-01's 258 -> 49 (12; 5-10 also helped);
+  // vrchat-01 and ms4-01 unchanged.
+  if (found == room->bases.end() && keyframes < kMinLocateKeyframes) return;
   if (found == room->bases.end()) {
     RoomBase base;
     base.serial = serial;

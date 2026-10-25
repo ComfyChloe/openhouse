@@ -379,6 +379,7 @@ static void cmd_multi(char *a1, char *a2)
         }
         con_printf("\n");
         if (MC->slot) con_printf("master frames decoded %u  bad %u  from a slave (relocked) %u  correlator %s\n", multi_frames_decoded(), multi_frames_bad(), multi_frames_wrong(), timebase_corr_state());
+        if (MC->slot) con_printf("turns swept without that revolution's master flash %u\n", multi_blind_sweeps());
         con_printf("rev %u (turn %u)  this rev: %s, %s  superframe confirms %u  realigns %u  ootx mode 0x%02x\n",
                    timebase_rev(), timebase_rev() % (uint32_t)multi_count(), timebase_skip() ? "skip" : "SWEEP",
                    timebase_flash_this_rev() ? "flash" : "dark", timebase_sf_confirm(), sf_realign_count,

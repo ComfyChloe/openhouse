@@ -55,6 +55,7 @@ Eigen::Matrix3d Leveling(double pitch, double roll, int method);
 
 class RoomMap {
  public:
+  static constexpr int kMinLocateKeyframes = 12;  // keyframes before the solver first places a base
   // Persistence (own format). Missing file = empty map, not an error.
   bool Load(const std::string& path, std::string* error = nullptr);
   bool Save(const std::string& path, std::string* error = nullptr) const;

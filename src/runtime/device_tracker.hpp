@@ -89,6 +89,10 @@ class DeviceTracker {
   std::unique_ptr<LighthouseDirect> filter_;
   std::map<uint32_t, std::pair<BaseConfig, BaseDynamicState>> bases_;
   std::optional<direct::DirectFilter> carry_;  // calibrated filter from the last track
+  // The calibration as of the last calm, well-lit moment (no violent motion, light
+  // flowing): what a fly-away falls back on, its own having soaked up the error.
+  std::optional<direct::DirectFilter> calm_;
+  uint64_t calmUpdates_ = 0;
   std::optional<double> latestImu_;
   uint64_t roomRevision_ = ~uint64_t{0};
   uint64_t altSyncRevision_ = 0;
@@ -118,6 +122,8 @@ class DeviceTracker {
   // consecutive well-lit frames of a base the filter rejected, per sweep axis: a view of
   // the base turned about one rotor's axis spoils only the other axis's angles
   std::map<std::pair<uint32_t, int>, int> rejectStreak_;
+  int refusedLit_ = 0;  // well-lit frames refused since light was last taken
+  static constexpr double kRefusedLightReset = 0.5;  // s of refused light before reacquiring
   std::map<uint32_t, int> disagreeing_;   // rejection streaks of an alt base the room and filter agree on
   std::map<uint32_t, std::pair<uint32_t, uint32_t>> altEpochs_;
   std::map<uint32_t, double> loosened_;  // alternate bases loosened for a relearn: since when
@@ -130,6 +136,7 @@ class DeviceTracker {
   double sweepInterval_ = 1.0 / 60;  // of the last frame's base
   double inertialLag_ = 0.12;  // s behind the newest IMU sample the filter may advance without light
   TrackerOutput output_, lastRaw_;
+  double lastSmoothAt_ = 0;  // Now() of the last smoothed output
   bool haveSmooth_ = false;
   Eigen::Vector3d offsetP_ = Eigen::Vector3d::Zero();
   Eigen::Quaterniond offsetQ_ = Eigen::Quaterniond::Identity();

@@ -118,7 +118,15 @@ bool LighthouseDirect::ImuUpdate(const ImuSample& sample) {
   if (!(0 <= dt && dt <= 0.25)) return false;
   std::vector<Residual> residuals;
   std::vector<double> measurements, variances;
-  filter_.ComputeProcessNoise(dt); filter_.Predict(dt, dt);
+  filter_.ComputeProcessNoise(dt);
+  // Not stock: a saturated accelerometer axis means the device accelerates harder than
+  // the IMU can say, by an unknown amount. The prediction is then much less certain than
+  // the jerk model thinks, and the gates threw out the light that would correct it: a
+  // tracker shaken hard for 7 s (fastmotion4, 70-80 % of samples saturated) flew away 5
+  // times; with this, none (fastmotion3: tracking 91 -> 97 %). x10 is the strength: x100
+  // was worse on both. Gyro saturation is left alone (it added rotation spikes).
+  if (swing_ && (sample.saturated & 0x7)) filter_.Q.topLeftCorner(9, 9) *= kSaturatedJerkScale;
+  filter_.Predict(dt, dt);
   // Not stock: a saturated axis still says the true value is at least its reading
   // (the range limit), that way. Stock drops it, and the filter, left to the light
   // alone, believed spins of 4500 deg/s (testswing: 27 % of samples saturated).
@@ -423,7 +431,16 @@ bool LighthouseDirect::ApplyOpticalResiduals(const OpticalFrame& frame, const Ba
     R(i, i) = variance + grazing * grazing;
   }
   R(m - 1, m - 1) = 1e-8;
-  if (!filter_.Update(residuals, R, Eigen::Map<Vec>(z.data(), m), true)) return false;
+  // Not stock: right after a reseed (reacquired with a carried calibration, so already
+  // at 201 updates) the other bases' light isn't frame-gated: it is what corrects the
+  // new pose, and gated, the device tracked from one base on a pose the others never fit
+  // until it ran off (fastmotion3 + fastmotion5: fly-aways 6 -> 2; spin-01's jumps > 5 cm
+  // 229 -> 258; Beat Saber-like fastmotionindex unchanged). The base it reacquired on
+  // stays gated: lifting that too let bad light through (spin-01: 229 -> 344).
+  filter_.frameGateOff = slot != 0 && filter_.updateCount < altGateUntil_;
+  const bool ok = filter_.Update(residuals, R, Eigen::Map<Vec>(z.data(), m), true);
+  filter_.frameGateOff = false;
+  if (!ok) return false;
   time_ = time;
   const uint64_t before = filter_.updateCount;
   if (hits >= 4) ++filter_.updateCount;
@@ -586,6 +603,7 @@ bool LighthouseDirect::SeedPose(const Seed& seed) {
   history_.clear();
   filter_.altBaseActive[0] = filter_.altBaseActive[1] = filter_.altBaseActive[2] = false;
   filter_.updateCount = seed.calibrated ? 201 : 101;
+  altGateUntil_ = filter_.updateCount + 100;
   calibrationSeen_ = seed.calibrated;
   slots_[0] = seed.base;
   for (int slot = 1; slot < 4; ++slot) slots_[slot] = 0;

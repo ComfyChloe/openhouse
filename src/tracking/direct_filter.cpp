@@ -273,7 +273,7 @@ bool DirectFilter::Update(const std::vector<Residual>& res, const Mat& R, const 
   // costs the extreme testswing capture (valid 94 -> 84 %), but without it a mid-game
   // fly-away in Beat Saber came back. Chosen for Beat Saber; live-tested there
   // 2026-10-22 (no fly-aways).
-  if (gate && gateSigma > 0 && updateCount >= 200 && opticalRows > 0 &&
+  if (gate && !frameGateOff && gateSigma > 0 && updateCount >= 200 && opticalRows > 0 &&
       2 * lastOutliers > opticalRows &&
       dx.size() >= 3 && dx.head<3>().norm() > kFrameRejectMove && frameRejectRun < kMaxFrameRejectRun) {
     ++frameRejectRun;

@@ -43,6 +43,7 @@ DeviceTracker::DeviceTracker(std::string id, TrackedObjectModel model, RoomMap* 
 
 void DeviceTracker::ResetFilter() {
   filter_ = std::make_unique<LighthouseDirect>(model_);
+  refusedLit_ = 0;
   // LH_STOCK_FILTER: the verified stock behaviour, for A/B comparisons.
   static const bool stock = std::getenv("LH_STOCK_FILTER") != nullptr;
   predictOutput_ = smoothOutput_ = holdStill_ = !stock;
@@ -171,6 +172,8 @@ void DeviceTracker::HandleFrame(const OpticalFrame& original) {
     for (const auto& s : frame.samples) if (s.sensor >= 0) lit.insert(s.sensor);
     if (lit.size() >= 4) {
       int& streak = rejectStreak_[{frame.baseSerial, frame.axis & 1}];
+      if (filter_->LastOpticalTime() == lastOpticalBefore) ++refusedLit_;
+      else refusedLit_ = 0;
       if (filter_->Filter().rejectCount != rejectsBefore) ++streak;
       else if (filter_->LastOpticalTime() != lastOpticalBefore) {
         streak = 0;
@@ -439,6 +442,12 @@ void DeviceTracker::SyncRoom() {
 
 void DeviceTracker::CheckHealth() {
   if (!filter_->Bootstrapped()) return;
+  {
+    const auto& f = filter_->Filter();
+    // Every 100 optical updates of calm tracking (about 2 s), the calibration is kept.
+    if (f.holdSlowStates || f.updateCount < 200 || !f.CalibrationHealthy()) calmUpdates_ = f.updateCount;
+    else if (f.updateCount >= calmUpdates_ + 100) { calm_ = f; calmUpdates_ = f.updateCount; }
+  }
   // The stock 0x358300 check assumes device timestamps advance. After a power
   // cycle the receiver can still deliver a new epoch's light pulses whose ticks
   // are behind the last optical time, so elapsed device time never grows; once a
@@ -547,15 +556,38 @@ void DeviceTracker::CheckHealth() {
       return;
     }
   }
+  // Not stock: light keeps arriving, well lit, and none of it fits the pose for 0.5 s:
+  // the filter is wrong, not the light. Reacquiring then (with the calm calibration)
+  // takes 0.1-0.4 s; waiting for the 2 s no-light timeout, the device coasted that long
+  // or ran out of bounds first (fastmotion3 + fastmotion5: fly-aways 2 -> 0, coasting
+  // about 5 -> 0.5 %; testswing drops out more, 37 -> 29 % valid, but with fewer jumps
+  // and rotation spikes: what it lost was tracking on a wrong pose).
+  if (refusedLit_ >= 8 && Now() - filter_->LastOpticalTime() > kRefusedLightReset) {
+    Log("light keeps arriving but none fits the pose: reacquiring");
+    if (calm_) carry_ = calm_;
+    ResetFilter();
+    return;
+  }
   const std::string reason = filter_->HealthCheck(stale ? filter_->Time() + 0.25 : Now());
   if (reason.empty()) return;
   Log(reason);
   const auto& f = filter_->Filter();
   if (f.CalibrationHealthy()) {
-    // Lost light (occlusion, out of bounds, fast spin): the calibration is fine. One
-    // that hasn't converged yet keeps the carried one it started from, so a device
-    // that drops out again shortly after reacquiring doesn't recalibrate from zero.
-    if (f.updateCount > 200) carry_ = f;
+    // Lost light (occlusion, fast spin): the calibration is fine. One that hasn't
+    // converged yet keeps the carried one it started from, so a device that drops out
+    // again shortly after reacquiring doesn't recalibrate from zero.
+    // Out of bounds is a fly-away: the filter put the error into its IMU biases on the
+    // way, and reacquiring with them made it refuse the light and fly off again, over
+    // and over, until the device was held still (fastmotion: 17 such resets). Dropping
+    // the calibration helped (11), but a fresh filter can't calibrate while the device
+    // keeps moving (fastmotion3: resets every 2-3 s): reacquire with the calibration
+    // from the last calm stretch instead.
+    if (reason.find("out of bounds") != std::string::npos) {
+      if (calm_) carry_ = calm_;
+      else carry_.reset();
+    } else if (f.updateCount > 200) {
+      carry_ = f;
+    }
   } else {
     // Never reseed the very calibration rejected by HealthCheck: that creates
     // an immediate fail -> carry -> reacquire -> fail loop.
@@ -637,6 +669,7 @@ void DeviceTracker::UpdateOutput() {
     output_.result = TrackingResult::RunningOutOfRange;
     output_.velocity.setZero();
     output_.angularVelocity.setZero();
+    lastSmoothAt_ = Now();  // the glide afterwards starts from this held pose, not the gap
     return;
   }
   if (raw.valid) switchedAt_.reset();
@@ -666,7 +699,11 @@ void DeviceTracker::UpdateOutput() {
       if (jumpP.norm() > 0.002) offsetP_ -= jumpP;
       if (Eigen::AngleAxisd(jumpQ).angle() > 0.0087) offsetQ_ = offsetQ_ * jumpQ.conjugate();
       const double tauP = offsetP_.norm() > 0.1 ? kSmoothTauLarge : kSmoothTau;
-      const double keepP = std::exp(-dt / tauP), keepQ = std::exp(-dt / kSmoothTau);
+      // The glide runs on output time: dt is filter time, and across a reacquire it
+      // spans the whole dark gap, so a 41 cm correction went 37 % through in one frame
+      // (vrchat-01: an 18 cm step).
+      const double step = std::clamp(Now() - lastSmoothAt_, 0.0, dt);
+      const double keepP = std::exp(-step / tauP), keepQ = std::exp(-step / kSmoothTau);
       offsetP_ *= keepP;
       offsetQ_ = Eigen::Quaterniond::Identity().slerp(keepQ, offsetQ_);
     } else if (dt >= 0.25 || dt < -0.25) {
@@ -675,6 +712,7 @@ void DeviceTracker::UpdateOutput() {
     }
   }
   lastRaw_ = raw;
+  lastSmoothAt_ = Now();
   TrackerOutput out = raw;
   Eigen::Vector3d outP = p + offsetP_;
   Eigen::Quaterniond outQ = (offsetQ_ * q).normalized();

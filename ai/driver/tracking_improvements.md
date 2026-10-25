@@ -277,3 +277,36 @@ the old path:
 
 Full 298 s Beat Saber replay on Windows: 148 s -> 65 s. Real-time replay (`--realtime`)
 now runs the warm-up at full speed instead of sleeping through it.
+
+## Fast motion and fresh rooms (2026-10-26)
+
+Recordings (owner's machine, `~/lh-captures`): `fastmotion3`/`4`/`5` (one tracker shaken
+harder and harder, 4 lhbs bases; `5` has 70-95 % of IMU samples saturated for 8 s) and
+`fastmotionindex` (both Index controllers, Beat Saber-style swings up to 6-7 m/s). The
+Beat Saber captures are gone; `fastmotionindex` replaces them. Score continuous replays
+against a copy of the room; the windowed scorer learns each window's room from scratch.
+
+* **Multi-station slot numbering** (`disambiguator_multi`): one stray early pulse shifted
+  every slot for good, pushing slots 3-4 out of range (the tracker never saw ch3/ch4).
+  Early stations now need 30 of the last 64 groups; a station's own OOTX slot renumbers.
+* **Fly-away calibration**: after an out-of-bounds reset the filter's calibration is
+  dropped and the one from the last calm, well-lit stretch (`calm_`, every 100 updates
+  without held slow states) is carried instead.
+* **Saturated accelerometer**: jerk process noise x10 on a saturated accel sample
+  (`kSaturatedJerkScale`); x100 was worse, gyro too added rotation spikes.
+* **After a reseed** (starts at 201 updates, so the frame gate was on at once): the other
+  bases' light isn't frame-gated for 100 updates; the reacquired base stays gated.
+* **Refused light**: 0.5 s of well-lit frames all refused -> reacquire with the calm
+  calibration (`kRefusedLightReset`), instead of the 2 s timeout / running out of bounds.
+* **Room**: a base is first placed from >= 12 keyframes (`kMinLocateKeyframes`); from one,
+  mid-swing, it was 1.3 m off.
+* **Output glide** across a deliberate base switch: the glide clock advances while the
+  pose is held, so the switch glides instead of stepping (vrchat-01: an 18 cm step).
+* Tried and dropped: keyframes only below a speed (slowed vrchat-01's room), loosening
+  the motion covariance instead of reacquiring, counting gated frames as contradictions.
+
+Results vs the start of the day: fastmotion3 fly-aways 9 -> 0, fastmotion4 5 -> 0,
+fastmotion5 5 -> 0 (coasting ~5 -> 0.6 %); fastmotionindex in the room: no losses, 1 jump
+> 5 cm in 32 s; fresh-room jumps > 5 cm: fastmotionindex 92 -> 28, spin-01 258 -> 57;
+vrchat-01 > 5 cm 5 -> 3; ms4-01 and the LH2 sessions unchanged. Cost: testswing valid
+37 -> 29 % (drops out instead of tracking a wrong pose; fewer jumps).
