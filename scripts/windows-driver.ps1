@@ -1,10 +1,12 @@
-# Run from the extracted Windows package. Never replaces a running driver's DLL.
+# Run from the extracted Windows package (Install-Driver.bat / Uninstall-Driver.bat).
+# Never replaces a running driver's DLL.
 param(
-    [ValidateSet('Install', 'Restore', 'Status')][string]$Action = 'Install',
+    [ValidateSet('Install', 'Uninstall', 'Restore', 'Status')][string]$Action = 'Install',
     [string]$SteamVRPath = '',
     [string]$DriverPath = (Join-Path $PSScriptRoot 'driver_lighthouse.dll')
 )
 $ErrorActionPreference = 'Stop'
+if ($Action -eq 'Restore') { $Action = 'Uninstall' }
 if (-not $SteamVRPath) {
     $pathsFile = Join-Path $env:LOCALAPPDATA 'openvr\openvrpaths.vrpath'
     if (Test-Path $pathsFile) {
@@ -32,6 +34,51 @@ if ($Action -eq 'Status') {
 if (Get-Process -Name vrserver,monado-service -ErrorAction SilentlyContinue) {
     throw 'Stop SteamVR / Monado before changing the driver.'
 }
+# The update check (openhouse-check.exe): an app SteamVR starts with every session that
+# warns when a SteamVR update replaced this driver. Registered in Steam's config:
+# appconfig.json lists app manifests, vrappconfig\ holds auto-launch.
+$checkKey = 'openhouse.check'
+$checkDir = Join-Path $env:LOCALAPPDATA 'openhouse'
+$checkManifest = Join-Path $checkDir 'openhouse-check.vrmanifest'
+# Without a byte order mark (PowerShell 5's UTF8 writes one).
+function Write-Text([string]$path, [string]$text) {
+    [System.IO.File]::WriteAllText($path, $text + "`n", (New-Object System.Text.UTF8Encoding($false)))
+}
+function Get-SteamConfig {
+    $pathsFile = Join-Path $env:LOCALAPPDATA 'openvr\openvrpaths.vrpath'
+    if (Test-Path $pathsFile) {
+        $config = @((Get-Content -Raw $pathsFile | ConvertFrom-Json).config) | Select-Object -First 1
+        if ($config) { return $config }
+    }
+    return Join-Path (Split-Path (Split-Path (Split-Path $SteamVRPath))) 'config'
+}
+function Set-CheckRegistration([bool]$register) {
+    $config = Get-SteamConfig
+    $appconfig = Join-Path $config 'appconfig.json'
+    $data = [ordered]@{}
+    if (Test-Path $appconfig) {
+        $parsed = Get-Content -Raw $appconfig | ConvertFrom-Json
+        foreach ($p in $parsed.PSObject.Properties) { $data[$p.Name] = $p.Value }
+    }
+    $paths = @(@($data['manifest_paths']) | Where-Object { $_ -and ($_ -ne $checkManifest) })
+    if ($register) { $paths += $checkManifest }
+    $data['manifest_paths'] = $paths
+    New-Item -ItemType Directory -Force -Path $config | Out-Null
+    Write-Text $appconfig (ConvertTo-Json $data -Depth 10)
+    $app = Join-Path $config "vrappconfig\$checkKey.vrappconfig"
+    if ($register) {
+        New-Item -ItemType Directory -Force -Path (Split-Path $app) | Out-Null
+        Write-Text $app '{ "autolaunch" : true, "last_launch_time" : "0" }'
+    } elseif (Test-Path $app) {
+        Remove-Item -LiteralPath $app -Force
+    }
+}
+
+if ($Action -eq 'Uninstall') {
+    # First, so the check goes even when there's no driver backup.
+    Set-CheckRegistration $false
+    if (Test-Path $checkDir) { Remove-Item -LiteralPath $checkDir -Recurse -Force }
+}
 if ($Action -eq 'Install') {
     if (-not (Test-Path $DriverPath)) { throw "Package DLL missing: $DriverPath" }
     # The stock DLL is kept as driver_lighthouse.dll.stock: our driver loads it at run time
@@ -47,10 +94,30 @@ if ($Action -eq 'Install') {
     }
     $source = $DriverPath
 } else {
-    if (-not (Test-Path $backup)) { throw "Stock backup missing: $backup" }
-    $source = $backup
+    if (-not (Test-Path $backup)) { throw "SteamVR's driver backup isn't there ($backup). Nothing to undo, or verify SteamVR's files in Steam." }
+    Move-Item -LiteralPath $backup -Destination $target -Force
+    Write-Output "SteamVR's own driver is back. Your room and settings in %APPDATA%\lh are kept."
+    exit 0
 }
 Copy-Item -LiteralPath $source -Destination "$target.new" -Force
 Move-Item -LiteralPath "$target.new" -Destination $target -Force
 if ((Get-FileHash $target).Hash -ne (Get-FileHash $source).Hash) { throw 'Installed file hash mismatch' }
-Write-Output "$Action complete: $target (stock backup retained at $backup)"
+$checkExe = Join-Path $PSScriptRoot 'apps\openhouse-check.exe'
+if (Test-Path $checkExe) {
+    New-Item -ItemType Directory -Force -Path $checkDir | Out-Null
+    Copy-Item -LiteralPath $checkExe -Destination (Join-Path $checkDir 'openhouse-check.exe') -Force
+    $manifest = [ordered]@{
+        source = 'openhouse'
+        applications = @([ordered]@{
+            app_key = $checkKey
+            launch_type = 'binary'
+            binary_path_windows = (Join-Path $checkDir 'openhouse-check.exe')
+            arguments = '"' + $directory + '"'
+            is_dashboard_overlay = $true
+            strings = @{ en_us = @{ name = 'openhouse update check'; description = 'Tells you when a SteamVR update replaced the openhouse driver' } }
+        })
+    }
+    Write-Text $checkManifest (ConvertTo-Json $manifest -Depth 10)
+    Set-CheckRegistration $true
+}
+Write-Output "Installed. Start SteamVR."

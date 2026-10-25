@@ -387,7 +387,7 @@ void UsbTransport::CompleteSetup(Open& o, bool supportsVersioning) {
       const double t0 = HostNow();
       if (ReadDeviceConfig([&](uint8_t* data, size_t size) { return hid_get_feature_report(o.dev, data, size); },
                            &o.info.configJson, &error)) {
-        Log(LogLevel::Info, "%s: read device config (%zu bytes) in %.0f ms\n", o.info.serial.c_str(), o.info.configJson.size(),
+        Log(LogLevel::Info, "%s: read device config (%lu bytes) in %.0f ms\n", o.info.serial.c_str(), (unsigned long)o.info.configJson.size(),
                 (HostNow() - t0) * 1000);
         std::lock_guard lock(configMutex_);
         sessionConfigs_[o.info.serial] = o.info.configJson;

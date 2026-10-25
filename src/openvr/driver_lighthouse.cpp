@@ -806,7 +806,7 @@ class Provider : public IServerTrackedDeviceProvider {
     if (presence == Presence::Yes) {
       triedStock_ = true;
       const std::string path = lh::openvr::StockHmd::DefaultPath();
-      if (path.empty()) Log("headset " + which + " on USB, but no stock driver (" + std::string(kStockFile) + ") to display it");
+      if (path.empty()) Log("headset " + which + " on USB, but SteamVR's own lighthouse driver wasn't found to display it (" + std::string(kStockFile) + " or SteamVR's drivers/lighthouse)");
       else {
         Log("headset " + which + " on USB: loading the stock driver for its display");
         stock_.Load(path, context_, [](const std::string& text) { Log(text); });
@@ -875,7 +875,7 @@ class Provider : public IServerTrackedDeviceProvider {
       triedStock_ = true;
       const std::string path = lh::openvr::StockHmd::DefaultPath();
       if (std::getenv("LH_NO_STOCK_HMD")) Log("a head-mounted display is attached; LH_NO_STOCK_HMD: not exposed");
-      else if (path.empty()) Log("a head-mounted display is attached, but no stock driver (" + std::string(kStockFile) + ") to display it");
+      else if (path.empty()) Log("a head-mounted display is attached, but SteamVR's own lighthouse driver wasn't found to display it (" + std::string(kStockFile) + " or SteamVR's drivers/lighthouse)");
       else stock_.Load(path, context_, [](const std::string& text) { Log(text); });
     }
     stock_.RunFrame();

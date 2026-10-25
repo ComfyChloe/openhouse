@@ -127,6 +127,8 @@ if(LH_BUILD_USB)
   if(LH_BUILD_TOOLS)
     add_executable(lhtool apps/lhtool/main.cpp)
     target_link_libraries(lhtool PRIVATE lh_usb lh_tracking lh)
+    # Started by SteamVR each session: warns when an update replaced our driver.
+    add_executable(openhouse-check WIN32 apps/openhouse-check/main.cpp)
     add_executable(lhcapture apps/lhcapture/main.cpp)
     target_include_directories(lhcapture PRIVATE src)
     target_link_libraries(lhcapture PRIVATE lh_usb nlohmann_json::nlohmann_json)

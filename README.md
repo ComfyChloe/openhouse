@@ -25,25 +25,19 @@ Grab the latest release for your platform. **Close SteamVR (and Monado/WiVRn) be
 
 The installer replaces SteamVR's `driver_lighthouse` and keeps the original one next to it as `driver_lighthouse.so.stock` / `driver_lighthouse.dll.stock`. openhouse needs that file to show the headset's display. The driver doesn't contain anything from the stock driver. It only loads the driver when a lighthouse headset is connected.
 
-SteamVR updates could overwrite the driver. Run the driver installer when SteamVR updates just in case. 
+SteamVR updates could overwrite the driver. The installer also adds a small update check to SteamVR that starts with it, and if a SteamVR update replaced openhouse, it shows a dialog telling you to run the installer again. On Linux, the installer also asks if you want the same check for Monado/WiVRn. If you say yes, it installs a small background service that checks every time Monado or WiVRn starts. The uninstaller removes all of it.
 
 ### Windows
-Extract the zip somewhere, open PowerShell in that folder and run:
-```powershell
-powershell -ExecutionPolicy Bypass -File .\Install-Driver.ps1 Install
-```
-To go back to SteamVR's driver:
-```powershell
-powershell -ExecutionPolicy Bypass -File .\Install-Driver.ps1 Restore
-```
-If your SteamVR is in another Steam library, add `-SteamVRPath "D:\SteamLibrary\steamapps\common\SteamVR"`.
+Extract the zip somewhere and double click `Install-Driver.bat`. To go back to SteamVR's driver, double click `Uninstall-Driver.bat`.
+
+If your SteamVR is in another Steam library, run it from a command prompt like `Install-Driver.bat -SteamVRPath "D:\SteamLibrary\steamapps\common\SteamVR"`.
 
 ### Linux
 ```sh
 tar xf openhouse-driver-linux.tar.gz
 cd openhouse-driver
 ./install.sh
-./install.sh uninstall # to restore the stock driver
+./uninstall.sh # to restore the stock driver
 ```
 If SteamVR is somewhere unusual, set `STEAMVR_DIR` before running it. The tracking visualizer needs `glfw` installed.
 

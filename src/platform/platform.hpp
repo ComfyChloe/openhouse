@@ -3,6 +3,9 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <vector>
+#include <iterator>
+#include <fstream>
 #include <string>
 #include <system_error>
 #include <thread>
@@ -68,8 +71,48 @@ inline std::string SteamConfigDirectory() {
   if (auto dir = Env("LH_STEAM_CONFIG_DIR"); !dir.empty()) return dir;
   return SteamRoot() + "/config/lighthouse";
 }
+// SteamVR's own record of where it is installed: openvrpaths.vrpath, "runtime" (a list,
+// SteamVR first; other OpenVR runtimes such as xrizer may follow). Works for any Steam
+// library and for a driver installed outside SteamVR's folder.
+inline std::string OpenVRPathsFile() {
+#ifdef _WIN32
+  auto dir = Env("LOCALAPPDATA");
+  return (dir.empty() ? Home() + "/AppData/Local" : dir) + "/openvr/openvrpaths.vrpath";
+#else
+  auto dir = Env("XDG_CONFIG_HOME");
+  return (dir.empty() ? Home() + "/.config" : dir) + "/openvr/openvrpaths.vrpath";
+#endif
+}
+// The quoted strings of a top-level JSON array `key` (JSON escapes undone). Enough for
+// openvrpaths.vrpath, which SteamVR writes; not a general JSON parser.
+inline std::vector<std::string> JsonStringList(const std::string& text, const std::string& key) {
+  std::vector<std::string> out;
+  auto at = text.find("\"" + key + "\"");
+  if (at == std::string::npos) return out;
+  at = text.find_first_of("[n", at + key.size() + 2);  // the list, or null
+  if (at == std::string::npos || text[at] != '[') return out;
+  for (size_t i = at + 1; i < text.size() && text[i] != ']'; ++i) {
+    if (text[i] != '"') continue;
+    std::string value;
+    for (++i; i < text.size() && text[i] != '"'; ++i) {
+      if (text[i] == '\\' && i + 1 < text.size()) ++i;
+      value += text[i];
+    }
+    out.push_back(value);
+  }
+  return out;
+}
+inline std::string SteamVRFromOpenVRPaths() {
+  std::ifstream in(OpenVRPathsFile(), std::ios::binary);
+  const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  std::error_code ec;
+  for (const auto& dir : JsonStringList(text, "runtime"))
+    if (std::filesystem::exists(std::filesystem::path(dir) / "drivers/lighthouse", ec)) return dir;
+  return {};
+}
 inline std::string SteamVRDirectory() {
   if (auto dir = Env("STEAMVR_PATH"); !dir.empty()) return dir;
+  if (auto dir = SteamVRFromOpenVRPaths(); !dir.empty()) return dir;
 #ifdef _WIN32
   // Installed module path also handles SteamVR in another Steam library.
   HMODULE module = nullptr;
