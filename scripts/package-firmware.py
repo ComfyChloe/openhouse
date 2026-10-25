@@ -27,7 +27,7 @@ out = repo / 'dist/openhouse-basestation-firmware'
 shutil.rmtree(out, ignore_errors=True)
 (out / 'firmware').mkdir(parents=True)
 shutil.copy2(image, out / 'firmware' / name)
-for f in ['install-firmware.sh', 'Install-Firmware.ps1', 'Install-Firmware.bat', 'README.txt']:
+for f in ['install-firmware.sh', 'Install-Firmware.ps1', 'Install-Firmware.bat']:
     shutil.copy2(fw / 'installer' / f, out / f)
 shutil.copy2(repo / 'LICENSE', out / 'LICENSE.txt')
 (out / 'install-firmware.sh').chmod(0o755)
