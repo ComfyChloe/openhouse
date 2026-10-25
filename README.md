@@ -60,6 +60,19 @@ Do one basestation at a time. **Do not copy the firmware file onto the drive you
 
 To go back to your old firmware: `Install-Firmware.bat -Restore backups\LHB-XXXXXXXX-....bin` on Windows, `./install-firmware.sh --restore backups/LHB-XXXXXXXX-....bin` on Linux. A 1.0 basestation can never get bricked so you can restore the stock firmware if something goes bad.
 
+#### Setting the channels
+Press the button on the back of the basestation to change its channel. With lhbs, it goes `A` -> `b` -> `c` -> `1` -> `2` -> `3` -> `4` and back to `A`. The channel is saved, so you only need to do this once
+
+- `A`, `b` and `c` are the normal channels and work exactly like the stock firmware (for 1 or 2 basestations).
+- `1` to `4` are the multi-station channels, for 2 to 4 basestations:
+  - Set **one** basestation to `1`. This is the master basestation
+  - Give every other basestation a different number (`2`, `3`, `4`). Two basestations on the same number won't work.
+  - Every basestation has to see the master's light, since that's how they stay in sync (sync cables do not work).
+  - You don't have to use every number. For 3 basestations, `1` `2` `3` is fine, and they'll share the sweeps between the 3 of them automatically.
+- Don't mix the normal and the multi-station channels in one room. Either all of them are on `A`/`b`/`c`, or all of them are on `1`-`4`.
+
+openhouse detects the multi-station mode by itself, nothing needs to be set in the driver. The stock SteamVR driver can't use the multi-station channels, so switch back to `A`/`b`/`c` if you go back to it.
+
 ## Usage
 
 ### SteamVR
