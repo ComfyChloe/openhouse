@@ -46,6 +46,7 @@ class LighthouseDirect {
   struct Predicted {
     double time = 0;
     double p[3] = {}, v[3] = {}, q[4] = {1, 0, 0, 0}, w[3] = {};  // base frame; w body
+    double a[3] = {};  // base frame, gravity removed: the newest sample's (or the state's)
   };
   Predicted PredictNow() const;
   DeviceTrackingInfo Info() const;

@@ -99,6 +99,13 @@ Settings are in `~/.config/lh/` on Linux and `%APPDATA%\lh\` on Windows.
 ```
 `roles` changes a device's role (`left_hand`, `right_hand` or `generic_tracker`, for example a Vive controller on your hip as a tracker), `controllers` picks which controller is left and right, and `disabledDevices` makes openhouse ignore a device completely.
 
+### SteamVR settings
+In SteamVR's settings there is an **openhouse** page (Settings > openhouse, you might need to turn on "Advanced Settings"):
+- **Predict fast swings with acceleration** helps SteamVR predict where your controllers will be during fast motion, like in Beat Saber. On by default.
+- **Position smoothing** and **Rotation smoothing** are how long a tracking correction takes to show up, 60 ms by default. Lower means less delay, but small corrections can show up as tiny jumps. 0 turns it off.
+
+Changes apply while you play, within a second.
+
 ### Environment variables
 You don't need any of these normally. On Linux, put them in SteamVR's launch options like `LH_LOG_LEVEL=DEBUG %command%`. On Windows, set them as system environment variables and restart Steam.
 

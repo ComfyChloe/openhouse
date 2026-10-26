@@ -627,6 +627,7 @@ TrackerOutput DeviceTracker::RawOutput() const {
   }
   Eigen::Isometry3d baseFromImu = BaseFromImu(f.x);
   Eigen::Vector3d velocity(f.x[3], f.x[4], f.x[5]), omega(f.x[13], f.x[14], f.x[15]);
+  Eigen::Vector3d acceleration(f.x[6], f.x[7], f.x[8]);
   out.filterPosition = base->worldFromBase * baseFromImu.translation();
   out.filterTime = filter_->Time();
   if (predictOutput_) {
@@ -636,9 +637,11 @@ TrackerOutput DeviceTracker::RawOutput() const {
     baseFromImu.linear() = Eigen::Quaterniond(now.q[0], now.q[1], now.q[2], now.q[3]).toRotationMatrix();
     velocity = Eigen::Vector3d(now.v);
     omega = Eigen::Vector3d(now.w);
+    acceleration = Eigen::Vector3d(now.a);
   }
   out.worldFromImu = base->worldFromBase * baseFromImu;
   out.velocity = base->worldFromBase.rotation() * velocity;
+  if (reportAcceleration_) out.acceleration = base->worldFromBase.rotation() * acceleration;
   out.angularVelocity = out.worldFromImu.rotation() * omega;
   const double age = Now() - filter_->LastOpticalTime();
   out.valid = true;
@@ -669,6 +672,7 @@ void DeviceTracker::UpdateOutput() {
     output_.result = TrackingResult::RunningOutOfRange;
     output_.velocity.setZero();
     output_.angularVelocity.setZero();
+    output_.acceleration.setZero();
     lastSmoothAt_ = Now();  // the glide afterwards starts from this held pose, not the gap
     return;
   }
@@ -679,7 +683,7 @@ void DeviceTracker::UpdateOutput() {
     output_ = raw;
     return;
   }
-  constexpr double kSmoothTau = 0.06, kSmoothTauLarge = 0.15, kCoastTau = 0.12, kCoastAfter = 0.06;
+  constexpr double kCoastTau = 0.12, kCoastAfter = 0.06;
   const Eigen::Vector3d p = raw.worldFromImu.translation();
   const Eigen::Quaterniond q(raw.worldFromImu.rotation());
   if (!haveSmooth_) {
@@ -698,12 +702,14 @@ void DeviceTracker::UpdateOutput() {
       const Eigen::Quaterniond jumpQ = q * expectQ.conjugate();
       if (jumpP.norm() > 0.002) offsetP_ -= jumpP;
       if (Eigen::AngleAxisd(jumpQ).angle() > 0.0087) offsetQ_ = offsetQ_ * jumpQ.conjugate();
-      const double tauP = offsetP_.norm() > 0.1 ? kSmoothTauLarge : kSmoothTau;
+      // Corrections over 10 cm glide 2.5x slower (they were jumps of a wrong pose).
+      const double tauP = offsetP_.norm() > 0.1 ? 2.5 * smoothPosition_ : smoothPosition_;
       // The glide runs on output time: dt is filter time, and across a reacquire it
       // spans the whole dark gap, so a 41 cm correction went 37 % through in one frame
       // (vrchat-01: an 18 cm step).
       const double step = std::clamp(Now() - lastSmoothAt_, 0.0, dt);
-      const double keepP = std::exp(-step / tauP), keepQ = std::exp(-step / kSmoothTau);
+      const double keepP = tauP > 0 ? std::exp(-step / tauP) : 0.0;
+      const double keepQ = smoothRotation_ > 0 ? std::exp(-step / smoothRotation_) : 0.0;
       offsetP_ *= keepP;
       offsetQ_ = Eigen::Quaterniond::Identity().slerp(keepQ, offsetQ_);
     } else if (dt >= 0.25 || dt < -0.25) {
@@ -725,6 +731,7 @@ void DeviceTracker::UpdateOutput() {
     out.worldFromImu = *heldPose_;
     out.velocity.setZero();
     out.angularVelocity.setZero();
+    out.acceleration.setZero();
     coastAnchor_.reset();
     output_ = out;
     return;
@@ -743,6 +750,7 @@ void DeviceTracker::UpdateOutput() {
     const double decay = std::exp(-t / kCoastTau);
     outP = coastAnchor_->position + coastAnchor_->velocity * kCoastTau * (1 - decay);
     out.velocity = coastAnchor_->velocity * decay;
+    out.acceleration.setZero();
     offsetP_ = outP - p;  // so light coming back glides from here
   } else {
     coastAnchor_.reset();

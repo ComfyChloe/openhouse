@@ -80,7 +80,8 @@ void DrawRoom(const State& s) {
   for (const auto& b : s.bases) {
     if (!b.seen) continue;
     ++visible;
-    if (b.origin || (b.placed && b.sigma <= s.room.settleSigma)) continue;
+    // As the driver settles: a locked base counts (up to 20 mm, RoomSettle::kLockedMaxSigma).
+    if (b.origin || (b.placed && (b.sigma <= s.room.settleSigma || (b.locked && b.sigma <= 0.02)))) continue;
     if (!worst || b.sigma > worst->sigma) worst = &b;
   }
   if (visible == 0) {

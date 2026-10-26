@@ -64,6 +64,7 @@ struct DevicePose {
   Pose imuFromHead;             // constant per device (DriverPose qDriverFromHead*)
   std::array<double, 3> velocity{};         // world, m/s
   std::array<double, 3> angularVelocity{};  // world, rad/s
+  std::array<double, 3> acceleration{};     // world, m/s^2 (0 unless reported)
   uint32_t primaryBase = 0;     // base whose frame the filter runs in
   std::vector<uint32_t> bases;  // all bases in the filter
   // Light used in the last 0.5 s, per base: frames and the mean sensors lit per frame
@@ -219,6 +220,10 @@ class Session {
   // Enable/disable a device by serial. Disabled devices produce no poses, input or
   // room-map contributions. Persisted in the settings file when there is one.
   virtual void SetDeviceEnabled(const std::string& serial, bool enabled) = 0;
+  // Output tuning, for every device, applied at once: how long corrections take to show
+  // (glide time constants, s; 0 = at once) and whether poses carry the acceleration for
+  // the host to predict with. Defaults 0.06 s, 0.06 s, true.
+  virtual void SetOutputTuning(double positionSmoothing, double rotationSmoothing, bool reportAcceleration) = 0;
 
   // Wireless receivers (dongles), live USB only: serial, and the device paired and
   // connected to it now ("" if none).

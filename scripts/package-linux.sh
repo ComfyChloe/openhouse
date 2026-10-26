@@ -12,6 +12,7 @@ python3 "$repo/scripts/package-driver.py" "$build/openvr/lighthouse/bin/linux64/
 cp "$repo/packaging/install-linux.sh" "$out/install.sh"
 cp "$repo/packaging/uninstall-linux.sh" "$out/uninstall.sh"
 cp "$repo/packaging/steamvr-dir.sh" "$out/.steamvr-dir.sh"
+cp "$repo/packaging/settingsschema.vrsettings" "$out/"
 for tool in lhtool lhcapture openhouse-viewer openhouse-check; do
   cp "$build/$tool" "$out/tools/"
   strip "$out/tools/$tool"

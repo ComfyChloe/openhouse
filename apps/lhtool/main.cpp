@@ -93,7 +93,7 @@ int Usage() {
           "  lhtool track IN.lhraw [--db DATABASE.json]\n"
           "  lhtool track live [SECONDS] [--db DATABASE.json]\n"
           "  lhtool session IN.lhraw|live [--seconds N] [--rate HZ] [--room ROOM.json] [--realtime] [--disable SERIAL]... [--settings SETTINGS.json] [--steam-db DB.json|-]\n"
-          "      [--from S] [--to S] [--only SERIAL]... [--trace OUT.jsonl]  replay window (capture seconds),\n"
+          "      [--from S] [--to S] [--only SERIAL]... [--trace OUT.jsonl] [--smoothing S] [--no-acceleration]  replay window (capture seconds),\n"
           "      devices, and every pose at 100 Hz of capture time\n"
           "      liblh session: shared room map, roles from device JSON, Index input; JSON Lines\n"
           "  lhtool haptics SERIAL [--frequency HZ] [--amplitude 0..1] [--duration S] [--pulses N] [--capture OUT]\n"
@@ -223,12 +223,15 @@ int SessionCommand(int argc, char** argv) {
   lh::SessionOptions options;
   const bool live = std::string(argv[2]) == "live";
   if (!live) { options.replayPath = argv[2]; options.replayRealtime = false; }
-  double seconds = 0, rate = 30;
+  double seconds = 0, rate = 30, smoothing = 0.06;
+  bool acceleration = true;
   for (int i = 3; i < argc; ++i) {
     const std::string a = argv[i];
     if (a == "--seconds" && i + 1 < argc) seconds = std::atof(argv[++i]);
     else if (a == "--rate" && i + 1 < argc) rate = std::max(1.0, std::atof(argv[++i]));
     else if (a == "--room" && i + 1 < argc) options.roomMapPath = argv[++i];
+    else if (a == "--smoothing" && i + 1 < argc) smoothing = std::atof(argv[++i]);
+    else if (a == "--no-acceleration") acceleration = false;
     else if (a == "--steam-db" && i + 1 < argc) options.steamDatabasePath = argv[++i];  // "-": none
     else if (a == "--realtime") options.replayRealtime = true;
     else if (a == "--disable" && i + 1 < argc) options.disabledDevices.push_back(argv[++i]);
@@ -242,6 +245,7 @@ int SessionCommand(int argc, char** argv) {
   auto session = lh::Session::Create(options);
   std::string error;
   if (!session->Start(&error)) { fprintf(stderr, "lhtool: %s\n", error.c_str()); return 1; }
+  session->SetOutputTuning(smoothing, smoothing, acceleration);  // what the SteamVR settings page sets
   const auto start = std::chrono::steady_clock::now();
   double lastSample = -1e9;
   auto emit = [&] {

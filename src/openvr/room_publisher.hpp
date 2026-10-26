@@ -22,8 +22,14 @@ class RoomSettle {
   static constexpr double kNewEpoch = 0.01;      // m: a settled room this different is new
   static constexpr double kNewEpochRad = 0.3 * 0.017453292519943295;
   static constexpr double kMaxSigma = 0.005;     // m
+  // A locked base (placed from enough evidence; only its own accelerometer moves it) is
+  // as placed as it gets: it counts up to this.
+  static constexpr double kLockedMaxSigma = 0.02;  // m
 
-  struct Base { std::string serial; bool visible, placed; Eigen::Isometry3d rawFromBase; double sigma; };
+  struct Base {
+    std::string serial; bool visible, placed; Eigen::Isometry3d rawFromBase; double sigma; bool locked = false;
+    bool Good() const { return placed && (sigma <= kMaxSigma || (locked && sigma <= kLockedMaxSigma)); }
+  };
   // Returns whether the room is settled now; epoch() bumps on a new settled room.
   bool Update(const std::vector<Base>& bases, double now);
   uint64_t epoch() const { return epoch_; }

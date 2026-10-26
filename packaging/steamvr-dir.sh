@@ -91,3 +91,17 @@ remove_monado_check() {
   rm -f "$monado_unit"
   systemctl --user daemon-reload 2>/dev/null || true
 }
+
+# The openhouse page in SteamVR's settings: a settings schema in the lighthouse driver's
+# resources (SteamVR has none there today; one it ships later is kept as .stock).
+schema="$(cd "$dir/../.." && pwd)/resources/settings/settingsschema.vrsettings"
+install_schema() {
+  mkdir -p "$(dirname "$schema")"
+  if [[ -f "$schema" ]] && ! grep -q driver_openhouse "$schema"; then cp -p "$schema" "$schema.stock"; fi
+  cp "$here/settingsschema.vrsettings" "$schema"
+}
+remove_schema() {
+  [[ -f "$schema" ]] && grep -q driver_openhouse "$schema" && rm -f "$schema"
+  [[ -f "$schema.stock" ]] && mv "$schema.stock" "$schema"
+  return 0
+}

@@ -74,8 +74,26 @@ function Set-CheckRegistration([bool]$register) {
     }
 }
 
+# The openhouse page in SteamVR's settings: a settings schema in the lighthouse driver's
+# resources (SteamVR has none there today; one it ships later is kept as .stock).
+$schema = Join-Path (Split-Path (Split-Path $directory)) 'resources\settings\settingsschema.vrsettings'
+function Install-Schema {
+    $source = Join-Path $PSScriptRoot 'settingsschema.vrsettings'
+    if (-not (Test-Path $source)) { return }
+    New-Item -ItemType Directory -Force -Path (Split-Path $schema) | Out-Null
+    if ((Test-Path $schema) -and -not (Select-String -Quiet -Path $schema -Pattern 'driver_openhouse')) {
+        Copy-Item -LiteralPath $schema -Destination "$schema.stock" -Force
+    }
+    Copy-Item -LiteralPath $source -Destination $schema -Force
+}
+function Remove-Schema {
+    if ((Test-Path $schema) -and (Select-String -Quiet -Path $schema -Pattern 'driver_openhouse')) { Remove-Item -LiteralPath $schema -Force }
+    if (Test-Path "$schema.stock") { Move-Item -LiteralPath "$schema.stock" -Destination $schema -Force }
+}
+
 if ($Action -eq 'Uninstall') {
     # First, so the check goes even when there's no driver backup.
+    Remove-Schema
     Set-CheckRegistration $false
     if (Test-Path $checkDir) { Remove-Item -LiteralPath $checkDir -Recurse -Force }
 }
@@ -102,6 +120,7 @@ if ($Action -eq 'Install') {
 Copy-Item -LiteralPath $source -Destination "$target.new" -Force
 Move-Item -LiteralPath "$target.new" -Destination $target -Force
 if ((Get-FileHash $target).Hash -ne (Get-FileHash $source).Hash) { throw 'Installed file hash mismatch' }
+Install-Schema
 $checkExe = Join-Path $PSScriptRoot 'apps\openhouse-check.exe'
 if (Test-Path $checkExe) {
     New-Item -ItemType Directory -Force -Path $checkDir | Out-Null

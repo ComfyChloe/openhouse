@@ -48,6 +48,7 @@ gpl = Path('/usr/share/licenses/spdx/GPL-3.0-only.txt')
 if gpl.is_file():
     shutil.copy2(gpl, licenses / 'GCC-GPL-3.0.txt')
 shutil.copy2(repo / 'scripts/windows-driver.ps1', out / 'openhouse-driver.ps1')
+shutil.copy2(repo / 'packaging/settingsschema.vrsettings', out / 'settingsschema.vrsettings')
 for name, action in [('Install-Driver.bat', 'Install'), ('Uninstall-Driver.bat', 'Uninstall')]:
     (out / name).write_bytes(('@echo off\r\npowershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0openhouse-driver.ps1" '
                               + action + ' %*\r\npause\r\n').encode())

@@ -136,6 +136,21 @@ void Log(lh::LogLevel level, const std::string& text, const std::string& serial 
 void Log(const std::string& text) { Log(lh::ClassifyLog(text), text); }
 
 // The process hosting the driver (vrserver, monado-service, wivrn-server, ...).
+std::string HostName();
+
+// No stock display for a lighthouse headset: LH_NO_STOCK_HMD, or WiVRn, which streams its
+// own headset (a Vive left plugged in crashed wivrn-server inside the stock driver's
+// headset setup). LH_STOCK_HMD=1 still forces it.
+bool StockHmdUnwanted(std::string* why) {
+  if (std::getenv("LH_NO_STOCK_HMD")) { if (why) *why = "LH_NO_STOCK_HMD"; return true; }
+  const char* force = std::getenv("LH_STOCK_HMD");
+  if (!(force && *force == '1') && HostName() == "wivrn-server") {
+    if (why) *why = "WiVRn streams its own headset";
+    return true;
+  }
+  return false;
+}
+
 std::string HostName() {
 #ifdef _WIN32
   char path[MAX_PATH]{};
@@ -269,6 +284,7 @@ class Device : public ITrackedDeviceServerDriver {
     for (int i = 0; i < 3; ++i) {
       p.vecPosition[i] = pose.worldFromImu.position[size_t(i)];
       p.vecVelocity[i] = pose.velocity[size_t(i)];
+      p.vecAcceleration[i] = pose.acceleration[size_t(i)];  // SteamVR predicts with it (swings curve)
     }
     // Angular velocity in the device (IMU) frame, as the stock driver reports it.
     const auto& o = pose.worldFromImu.orientation;
@@ -768,6 +784,7 @@ class Provider : public IServerTrackedDeviceProvider {
       session_.reset();
       return VRInitError_Init_HmdNotFound;
     }
+    ApplyTuning(true);
     Log("liblh session started (" + std::string(options.replayPath.empty() ? "live USB" : "replay " + options.replayPath) +
         "); head-mounted displays: tracked by us, displayed through the stock driver when one is present");
     Log(std::string("input components through ") +
@@ -780,7 +797,10 @@ class Provider : public IServerTrackedDeviceProvider {
     using Presence = lh::openvr::StockHmd::Presence;
     std::string which;
     std::vector<std::string> maybe;
-    Presence presence = std::getenv("LH_NO_STOCK_HMD") ? Presence::No : lh::openvr::StockHmd::HeadsetPresent(&which, &maybe);
+    std::string unwanted;
+    const bool noStock = StockHmdUnwanted(&unwanted);
+    Presence presence = noStock ? Presence::No : lh::openvr::StockHmd::HeadsetPresent(&which, &maybe);
+    if (noStock && unwanted != "LH_NO_STOCK_HMD") Log("lighthouse headsets aren't displayed here (" + unwanted + ")");
     if (presence == Presence::Maybe) {
       // Ask the device configs (role from device_class), up to 2 s: inside Monado's 3 s.
       const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(2000);
@@ -874,7 +894,8 @@ class Provider : public IServerTrackedDeviceProvider {
     if (wantStock_ && !triedStock_) {
       triedStock_ = true;
       const std::string path = lh::openvr::StockHmd::DefaultPath();
-      if (std::getenv("LH_NO_STOCK_HMD")) Log("a head-mounted display is attached; LH_NO_STOCK_HMD: not exposed");
+      std::string unwanted;
+      if (StockHmdUnwanted(&unwanted)) Log("a head-mounted display is attached; not exposed (" + unwanted + ")");
       else if (path.empty()) Log("a head-mounted display is attached, but SteamVR's own lighthouse driver wasn't found to display it (" + std::string(kStockFile) + " or SteamVR's drivers/lighthouse)");
       else stock_.Load(path, context_, [](const std::string& text) { Log(text); });
     }
@@ -987,6 +1008,10 @@ class Provider : public IServerTrackedDeviceProvider {
           if (found != devices_.end()) found->second->UpdateBase(b);
         }
       }
+      if (now - lastTuning_ >= 1.0) {  // the SteamVR settings page: applies while playing
+        lastTuning_ = now;
+        ApplyTuning(false);
+      }
       if (now - lastTelemetry_ >= 0.05) {  // viewers: ~20 Hz is plenty to watch
         lastTelemetry_ = now;
         g_telemetry.PublishState(now, snapshot_, updates, session_->Receivers(),
@@ -1083,6 +1108,33 @@ class Provider : public IServerTrackedDeviceProvider {
   std::string warnedRoom_;
   double lastSnapshot_ = -1e300;
   double lastTelemetry_ = -1e300;
+  double lastTuning_ = -1e300;
+
+  // SteamVR settings, section driver_openhouse (the page from settingsschema.vrsettings,
+  // which the installer puts in the lighthouse driver's resources). Missing values are
+  // written with their defaults first, so the page shows them.
+  static constexpr const char* kSection = "driver_openhouse";
+  void ApplyTuning(bool writeDefaults) {
+    if (!session_ || !VRSettings()) return;
+    auto number = [&](const char* key, float fallback) {
+      EVRSettingsError e = VRSettingsError_None;
+      const float v = VRSettings()->GetFloat(kSection, key, &e);
+      if (e == VRSettingsError_None) return v;
+      if (writeDefaults) VRSettings()->SetFloat(kSection, key, fallback);
+      return fallback;
+    };
+    auto flag = [&](const char* key, bool fallback) {
+      EVRSettingsError e = VRSettingsError_None;
+      const bool v = VRSettings()->GetBool(kSection, key, &e);
+      if (e == VRSettingsError_None) return v;
+      if (writeDefaults) VRSettings()->SetBool(kSection, key, fallback);
+      return fallback;
+    };
+    const double position = number("positionSmoothingMs", 60) / 1000.0;
+    const double rotation = number("rotationSmoothingMs", 60) / 1000.0;
+    const bool acceleration = flag("predictWithAcceleration", true);
+    session_->SetOutputTuning(position, rotation, acceleration);
+  }
 };
 
 Provider g_provider;

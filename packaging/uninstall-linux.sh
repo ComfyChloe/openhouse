@@ -7,6 +7,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 check_registration unregister
 remove_monado_check
 rm -rf "$check_dir"
+remove_schema
 [[ -f "$backup" ]] || { echo "SteamVR's driver backup isn't there ($backup). Nothing to undo, or verify SteamVR's files in Steam." >&2; exit 1; }
 mv "$backup" "$target"
 rm -rf "$dir/lh-libs"

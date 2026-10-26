@@ -243,6 +243,7 @@ class SessionImpl final : public Session, public InputSinkBase {
   void SolverMain();
   void LoadSettings();
   void SaveSettings();
+  void SetOutputTuning(double positionSmoothing, double rotationSmoothing, bool reportAcceleration) override;
   bool Enabled(const DeviceId& id) const { return !disabled_.count(id); }
   void CollectLogs(Device* d);
   void MaybeSave();
@@ -260,6 +261,8 @@ class SessionImpl final : public Session, public InputSinkBase {
   bool explicitControllers_ = false;
   std::string leftController_, rightController_;
   std::set<std::string> disabled_;
+  double smoothPosition_ = DeviceTracker::kDefaultSmoothing, smoothRotation_ = DeviceTracker::kDefaultSmoothing;
+  bool reportAcceleration_ = true;
   std::map<std::string, std::string> roles_;  // settings.json "roles": serial -> tracked_controller_role
   bool persist_ = false;
   std::deque<SessionEvent> events_;
@@ -461,11 +464,12 @@ void SessionImpl::ReplayMain() {
                        const auto& p = u.pose;
                        std::fprintf(trace,
                                     "{\"t\":%.6f,\"serial\":\"%s\",\"valid\":%d,\"state\":\"%s\",\"result\":%d,"
-                                    "\"position\":[%.6f,%.6f,%.6f],\"orientation\":[%.7f,%.7f,%.7f,%.7f],\"velocity\":[%.5f,%.5f,%.5f],\"ft\":%.6f,\"fp\":[%.6f,%.6f,%.6f],\"pt\":%.6f}\n",
+                                    "\"position\":[%.6f,%.6f,%.6f],\"orientation\":[%.7f,%.7f,%.7f,%.7f],\"velocity\":[%.5f,%.5f,%.5f],\"acceleration\":[%.3f,%.3f,%.3f],\"ft\":%.6f,\"fp\":[%.6f,%.6f,%.6f],\"pt\":%.6f}\n",
                                     r.hostTime, u.serial.c_str(), int(p.valid), ToString(p.state), int(p.result),
                                     p.worldFromImu.position[0], p.worldFromImu.position[1], p.worldFromImu.position[2],
                                     p.worldFromImu.orientation[0], p.worldFromImu.orientation[1], p.worldFromImu.orientation[2],
                                     p.worldFromImu.orientation[3], p.velocity[0], p.velocity[1], p.velocity[2],
+                                    p.acceleration[0], p.acceleration[1], p.acceleration[2],
                                     p.filterTime, p.filterPosition[0], p.filterPosition[1], p.filterPosition[2], p.hostTime);
                      }
                    }
@@ -545,6 +549,8 @@ void SessionImpl::OnDeviceAttached(const DeviceId& id, const std::string& config
     d.imuFromHead = objectFromImu.inverse() * objectFromHead;
     model.serial = id;
     d.tracker = std::make_unique<DeviceTracker>(id, model, &room_);
+    d.tracker->SetSmoothing(smoothPosition_, smoothRotation_);
+    d.tracker->SetReportAcceleration(reportAcceleration_);
     models_[id] = d.tracker->ImuModel();
     for (const auto& [serial, b] : bases_) d.tracker->OnBaseConfig(b.config, b.dynamic);
     PushIdentities();
@@ -912,6 +918,7 @@ DevicePose SessionImpl::MakePose(const Device& d) const {
   pose.worldFromHead = ToPose(out.worldFromImu * d.imuFromHead);
   pose.velocity = {out.velocity.x(), out.velocity.y(), out.velocity.z()};
   pose.angularVelocity = {out.angularVelocity.x(), out.angularVelocity.y(), out.angularVelocity.z()};
+  pose.acceleration = {out.acceleration.x(), out.acceleration.y(), out.acceleration.z()};
   pose.primaryBase = out.primary;
   pose.bases = out.bases;
   pose.coverage = out.coverage;
@@ -1037,6 +1044,24 @@ void SessionImpl::LoadSettings() {
   } catch (const std::exception& e) {
     Emit(SessionEventType::Log, "", "settings " + settingsPath_ + ": " + e.what());
   }
+}
+
+void SessionImpl::SetOutputTuning(double positionSmoothing, double rotationSmoothing, bool reportAcceleration) {
+  std::lock_guard lock(mutex_);
+  const double position = std::clamp(positionSmoothing, 0.0, 1.0), rotation = std::clamp(rotationSmoothing, 0.0, 1.0);
+  if (position == smoothPosition_ && rotation == smoothRotation_ && reportAcceleration == reportAcceleration_) return;
+  smoothPosition_ = position;
+  smoothRotation_ = rotation;
+  reportAcceleration_ = reportAcceleration;
+  for (auto& [id, d] : devices_) {
+    if (!d.tracker) continue;
+    d.tracker->SetSmoothing(position, rotation);
+    d.tracker->SetReportAcceleration(reportAcceleration);
+  }
+  char text[160];
+  std::snprintf(text, sizeof text, "smoothing: position %.0f ms, rotation %.0f ms%s; acceleration %s", position * 1000,
+                rotation * 1000, position == 0 && rotation == 0 ? " (off)" : "", reportAcceleration ? "reported" : "not reported");
+  Emit(SessionEventType::Log, "", text, LogLevel::Info);
 }
 
 void SessionImpl::SaveSettings() {

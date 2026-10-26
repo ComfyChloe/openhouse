@@ -1,0 +1,34 @@
+[
+    {
+        "title": "openhouse",
+        "show_without_hmd": true,
+        "values": [
+            {
+                "name": "/settings/driver_openhouse/predictWithAcceleration",
+                "control": "toggle",
+                "label": "Predict fast swings with acceleration",
+                "show_without_hmd": true
+            },
+            {
+                "name": "/settings/driver_openhouse/positionSmoothingMs",
+                "control": "slider",
+                "label": "Position smoothing (ms)",
+                "min": 0,
+                "max": 150,
+                "step": 5,
+                "decimals": 0,
+                "show_without_hmd": true
+            },
+            {
+                "name": "/settings/driver_openhouse/rotationSmoothingMs",
+                "control": "slider",
+                "label": "Rotation smoothing (ms)",
+                "min": 0,
+                "max": 150,
+                "step": 5,
+                "decimals": 0,
+                "show_without_hmd": true
+            }
+        ]
+    }
+]

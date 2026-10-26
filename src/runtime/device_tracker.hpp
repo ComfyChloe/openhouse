@@ -11,6 +11,8 @@
 //     on any located base.
 #pragma once
 
+#include <algorithm>
+
 #include <Eigen/Geometry>
 #include <deque>
 #include <map>
@@ -35,6 +37,7 @@ struct TrackerOutput {
   double deviceTime = 0;
   Eigen::Isometry3d worldFromImu = Eigen::Isometry3d::Identity();
   Eigen::Vector3d velocity = Eigen::Vector3d::Zero(), angularVelocity = Eigen::Vector3d::Zero();
+  Eigen::Vector3d acceleration = Eigen::Vector3d::Zero();  // world, gravity removed (0 if not reported)
   uint32_t primary = 0;
   std::vector<uint32_t> bases;
   std::vector<DevicePose::Coverage> coverage;  // light per base, last 0.5 s
@@ -45,6 +48,17 @@ struct TrackerOutput {
 
 class DeviceTracker {
  public:
+  static constexpr double kDefaultSmoothing = 0.06;  // s
+  // How long a correction from the light takes to show in the output (glide time
+  // constant, s), for position and rotation; 0 shows it at once (less latency in fast
+  // motion, more visible steps).
+  // Whether the output carries the acceleration (hosts predict with it; settings.json
+  // "acceleration").
+  void SetReportAcceleration(bool on) { reportAcceleration_ = on; }
+  void SetSmoothing(double position, double rotation) {
+    smoothPosition_ = std::max(0.0, position);
+    smoothRotation_ = std::max(0.0, rotation);
+  }
   DeviceTracker(std::string id, TrackedObjectModel model, RoomMap* room);
 
   void OnBaseConfig(const BaseConfig&, const BaseDynamicState&);
@@ -118,6 +132,9 @@ class DeviceTracker {
   int backwardPulses_ = 0;  // consecutive pulses timestamped behind the filter
   // Output stage (UpdateOutput)
   bool predictOutput_ = true, smoothOutput_ = true;
+  // Output glide time constants in s (settings.json "smoothing"; 0 = corrections show at once).
+  double smoothPosition_ = kDefaultSmoothing, smoothRotation_ = kDefaultSmoothing;
+  bool reportAcceleration_ = true;
   std::map<uint32_t, double> lastUsed_;
   // consecutive well-lit frames of a base the filter rejected, per sweep axis: a view of
   // the base turned about one rotor's axis spoils only the other axis's angles

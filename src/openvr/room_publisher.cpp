@@ -26,7 +26,7 @@ bool RoomSettle::Update(const std::vector<Base>& bases, double now) {
   bool complete = !bases.empty();
   for (const auto& b : bases) {
     if (!b.visible) continue;
-    if (!b.placed || !(b.sigma <= kMaxSigma)) complete = false;
+    if (!b.Good()) complete = false;
     else poses[b.serial] = b.rawFromBase;
   }
   bool still = complete && poses.size() == window_.size();
@@ -90,7 +90,7 @@ void RoomPublisher::Publish(const SessionSnapshot& snapshot, const Eigen::Isomet
     worldFromBase.linear() = Eigen::Quaterniond(o[0], o[1], o[2], o[3]).normalized().toRotationMatrix();
     worldFromBase.translation() = Eigen::Vector3d(b.worldFromBase.position.data());
     bases.push_back({b.serial, b.seen, b.known, rawFromWorld * worldFromBase,
-                     b.origin ? 0.0 : std::sqrt(std::max(b.positionVariance, 0.0))});
+                     b.origin ? 0.0 : std::sqrt(std::max(b.positionVariance, 0.0)), b.locked});
   }
   const bool settled = settle_.Update(bases, now);
   settled_ = settled;
@@ -101,10 +101,10 @@ void RoomPublisher::Publish(const SessionSnapshot& snapshot, const Eigen::Isomet
     std::string ok, waiting;
     for (const auto& b : bases) {
       if (!b.visible) continue;
-      const bool good = b.placed && b.sigma <= RoomSettle::kMaxSigma;
+      const bool good = b.Good();
       key += "|" + b.serial + (good ? "+" : "-");
       char item[96];
-      if (good) std::snprintf(item, sizeof item, " %s (%.1f mm)", b.serial.c_str(), b.sigma * 1000);
+      if (good) std::snprintf(item, sizeof item, " %s (%s%.1f mm)", b.serial.c_str(), b.locked && b.sigma > RoomSettle::kMaxSigma ? "locked, " : "", b.sigma * 1000);
       else if (!b.placed) std::snprintf(item, sizeof item, " %s (not placed)", b.serial.c_str());
       else std::snprintf(item, sizeof item, " %s (%.1f mm, needs %.0f)", b.serial.c_str(), b.sigma * 1000, RoomSettle::kMaxSigma * 1000);
       (good ? ok : waiting) += item;

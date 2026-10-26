@@ -511,6 +511,7 @@ LighthouseDirect::Predicted LighthouseDirect::PredictNow() const {
                                                        : Eigen::Matrix3d::Identity();
   const Eigen::Vector3d gravity = tiltRot * Eigen::Vector3d(0, x[18], 0);
   double t = time_;
+  Eigen::Vector3d lastA(x[6], x[7], x[8]);
   for (const auto& s : imu_) {
     const double dt = s.time - t;
     if (dt <= 0) continue;
@@ -526,6 +527,7 @@ LighthouseDirect::Predicted LighthouseDirect::PredictNow() const {
     }
     p += v * dt + 0.5 * a * dt * dt;
     v += a * dt;
+    lastA = a;
     const Eigen::Vector3d half = 0.5 * dt * w;
     const double angle = half.norm();
     Eigen::Quaterniond dq(1, 0, 0, 0);
@@ -537,7 +539,7 @@ LighthouseDirect::Predicted LighthouseDirect::PredictNow() const {
     t = s.time;
   }
   out.time = t;
-  for (int i = 0; i < 3; ++i) { out.p[i] = p[i]; out.v[i] = v[i]; out.w[i] = w[i]; }
+  for (int i = 0; i < 3; ++i) { out.p[i] = p[i]; out.v[i] = v[i]; out.w[i] = w[i]; out.a[i] = lastA[i]; }
   out.q[0] = q.w(); out.q[1] = q.x(); out.q[2] = q.y(); out.q[3] = q.z();
   return out;
 }
