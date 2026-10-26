@@ -5,7 +5,9 @@
 #include <chrono>
 #include <csignal>
 #include <cmath>
+#include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <sstream>
 #include <nlohmann/json.hpp>
 #include <cstdio>
@@ -92,12 +94,15 @@ int Usage() {
           "  lhtool stats live [SECONDS]\n"
           "  lhtool track IN.lhraw [--db DATABASE.json]\n"
           "  lhtool track live [SECONDS] [--db DATABASE.json]\n"
-          "  lhtool session IN.lhraw|live [--seconds N] [--rate HZ] [--room ROOM.json] [--realtime] [--disable SERIAL]... [--settings SETTINGS.json] [--steam-db DB.json|-]\n"
+          "  lhtool session IN.lhraw|live [--seconds N] [--rate HZ] [--room ROOM.json] [--realtime] [--disable SERIAL]... [--settings SETTINGS.json] [--steam-db DB.json|-] [--preinit DIR|-]\n"
           "      [--from S] [--to S] [--only SERIAL]... [--trace OUT.jsonl] [--smoothing S] [--no-acceleration]  replay window (capture seconds),\n"
           "      devices, and every pose at 100 Hz of capture time\n"
           "      liblh session: shared room map, roles from device JSON, Index input; JSON Lines\n"
           "  lhtool haptics SERIAL [--frequency HZ] [--amplitude 0..1] [--duration S] [--pulses N] [--capture OUT]\n"
-          "      direct receiver vibration diagnostic; prints actual HID write results\n");
+          "      direct receiver vibration diagnostic; prints actual HID write results\n"
+          "  lhtool configs OUT_DIR [SECONDS]\n"
+          "      save the JSON config of every connected device as OUT_DIR/<serial>.json, waiting SECONDS\n"
+          "      (default 10) for wireless devices; copy them to ~/.config/lh/preinit to preinitialize them\n");
   return 2;
 }
 
@@ -180,6 +185,45 @@ int Track(int argc, char** argv) {
 
 }  // namespace
 
+// Every connected device's config, as the driver reads it, into OUT_DIR/<serial>.json.
+int ConfigsCommand(int argc, char** argv) {
+  const std::filesystem::path dir = argv[2];
+  const double seconds = argc >= 4 ? atof(argv[3]) : 10;
+  struct ConfigSink : lh::InputSinkBase {
+    std::mutex mutex;
+    std::map<std::string, std::string> configs;
+    void OnDeviceAttached(const lh::DeviceId& id, const std::string& config) override {
+      if (config.empty()) return;
+      std::lock_guard lock(mutex);
+      if (!configs.count(id)) fprintf(stderr, "%s: config read (%zu bytes)\n", id.c_str(), config.size());
+      configs[id] = config;
+    }
+    void OnTransportLog(lh::LogLevel level, const std::string& text) override {
+      if (level >= lh::LogLevel::Warn) fprintf(stderr, "%s\n", text.c_str());
+    }
+  } sink;
+  std::error_code ec;
+  std::filesystem::create_directories(dir, ec);
+  if (ec) { fprintf(stderr, "lhtool: cannot create %s: %s\n", dir.string().c_str(), ec.message().c_str()); return 1; }
+  lh::usb::UsbTransport transport(&sink, {});
+  if (!transport.Start()) { fprintf(stderr, "lhtool: no receivers could be opened (close SteamVR/Monado first)\n"); return 1; }
+  fprintf(stderr, "waiting %.0f s for devices (turn on the wireless ones now)\n", seconds);
+  RunFor(seconds);
+  transport.Stop();
+  std::lock_guard lock(sink.mutex);
+  int written = 0;
+  for (const auto& [serial, config] : sink.configs) {
+    const auto path = dir / (serial + ".json");
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out << config;
+    if (!out) { fprintf(stderr, "lhtool: cannot write %s\n", path.string().c_str()); continue; }
+    printf("%s\n", path.string().c_str());
+    ++written;
+  }
+  fprintf(stderr, "%d device config(s) saved to %s\n", written, dir.string().c_str());
+  return written ? 0 : 1;
+}
+
 // liblh session front end: one JSON line per device per sample tick, plus events.
 int HapticsCommand(int argc, char** argv) {
   if (argc < 3) return Usage();
@@ -236,6 +280,7 @@ int SessionCommand(int argc, char** argv) {
     else if (a == "--realtime") options.replayRealtime = true;
     else if (a == "--disable" && i + 1 < argc) options.disabledDevices.push_back(argv[++i]);
     else if (a == "--settings" && i + 1 < argc) options.settingsPath = argv[++i];
+    else if (a == "--preinit" && i + 1 < argc) options.preinitDirectory = argv[++i];  // "-": none
     else if (a == "--from" && i + 1 < argc) options.replayFrom = std::atof(argv[++i]);
     else if (a == "--to" && i + 1 < argc) options.replayTo = std::atof(argv[++i]);
     else if (a == "--only" && i + 1 < argc) options.replayOnly.push_back(argv[++i]);
@@ -329,6 +374,7 @@ int main(int argc, char** argv) {
   if (cmd == "trim") return TrimCommand(argc, argv);
   if (cmd == "session" && argc >= 3) return SessionCommand(argc, argv);
   if (cmd == "haptics" && argc >= 3) return HapticsCommand(argc, argv);
+  if (cmd == "configs" && argc >= 3) return ConfigsCommand(argc, argv);
   if (cmd == "capture" && argc >= 3) {
     StatsSink stats;
     lh::usb::UsbTransportOptions o;

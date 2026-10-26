@@ -196,6 +196,11 @@ struct SessionOptions {
   std::vector<std::string> disabledDevices;
   // Settings file; empty = default for live sessions, none for replays.
   std::string settingsPath;
+  // Device JSON configs (*.json, e.g. from `lhtool configs`) of devices to create at start,
+  // disconnected until they connect: hosts that only take devices at startup (Monado) then
+  // still get one turned on later. A device whose own config differs updates its file.
+  // Empty = $XDG_CONFIG_HOME/lh/preinit for live sessions, none for replays; "-" = off.
+  std::string preinitDirectory;
   // Live USB: also record every raw report to this .lhraw (replayable).
   std::string capturePath;
 };

@@ -72,6 +72,7 @@ std::string BaseName(uint32_t serial) {
 
 std::string DefaultRoomMapPath() { return platform::ConfigDirectory() + "/roommap.json"; }
 std::string DefaultSettingsPath() { return platform::ConfigDirectory() + "/settings.json"; }
+std::string DefaultPreinitDirectory() { return platform::ConfigDirectory() + "/preinit"; }
 
 std::string FirstExisting(const std::vector<std::string>& paths) {
   for (const auto& p : paths)
@@ -199,6 +200,11 @@ class SessionImpl final : public Session, public InputSinkBase {
 
   // IInputSink (transport thread)
   void OnDeviceAttached(const DeviceId&, const std::string& configJson) override;
+  // Device JSON -> tracker, role, input. False (and logged) if the config is unusable.
+  bool SetUpDevice(const DeviceId& id, const std::string& config);
+  // preinit/*.json: devices created at start, disconnected until they really connect.
+  void LoadPreinit();
+  void UpdatePreinit(const DeviceId& id, const std::string& config);
   void OnDeviceDetached(const DeviceId&) override;
   void OnClockOffset(const DeviceId&, double offset) override;
   void OnImu(const DeviceId&, const ImuSample&) override;
@@ -257,7 +263,8 @@ class SessionImpl final : public Session, public InputSinkBase {
   std::map<uint32_t, Base> bases_;
   std::map<uint32_t, tdm::TdmDisambiguator::Identity> identities_;
   RoomMap room_;
-  std::string roomPath_, settingsPath_;
+  std::string roomPath_, settingsPath_, preinitDir_;
+  std::map<std::string, std::string> preinitFiles_;  // serial -> preinit file
   bool explicitControllers_ = false;
   std::string leftController_, rightController_;
   std::set<std::string> disabled_;
@@ -300,6 +307,9 @@ bool SessionImpl::Start(std::string* error) {
   settingsPath_ = options_.settingsPath.empty() && !replay ? DefaultSettingsPath() : options_.settingsPath;
   LoadSettings();
   for (const auto& serial : options_.disabledDevices) disabled_.insert(serial);
+  preinitDir_ = options_.preinitDirectory == "-" ? "" : options_.preinitDirectory.empty() && !replay ? DefaultPreinitDirectory()
+                                                                                                    : options_.preinitDirectory;
+  LoadPreinit();
   std::string steamDb = options_.steamDatabasePath;
   if (steamDb.empty()) {
     std::vector<std::string> candidates;
@@ -498,10 +508,15 @@ void SessionImpl::OnDeviceAttached(const DeviceId& id, const std::string& config
     if (d.tracker) Emit(SessionEventType::DeviceConnected, id, id + " connected");
     return;
   }
+  // A radio reconnect is a new timestamp/protocol epoch, even when the device
+  // JSON is identical; never take the duplicate-attach shortcut above for it.
+  Emit(SessionEventType::Log, id, id + (wasAttached ? ": reattached with a new radio epoch" : ": attached"));
+  if (SetUpDevice(id, config) && !configJson.empty()) UpdatePreinit(id, configJson);
+}
+
+bool SessionImpl::SetUpDevice(const DeviceId& id, const std::string& config) {
+  auto& d = devices_[id];
   try {
-    // A radio reconnect is a new timestamp/protocol epoch, even when the device
-    // JSON is identical; never take the duplicate-attach shortcut above for it.
-    Emit(SessionEventType::Log, id, id + (wasAttached ? ": reattached with a new radio epoch" : ": attached"));
     const json j = json::parse(config);
     TrackedObjectModel model;
     std::string err;
@@ -559,8 +574,63 @@ void SessionImpl::OnDeviceAttached(const DeviceId& id, const std::string& config
     Emit(SessionEventType::DeviceActivated, id,
          id + " activated as " + ToString(d.info.role) + (d.info.model.empty() ? "" : " (" + d.info.model + ")") +
              (Enabled(id) ? "" : " [disabled]"));
+    return true;
   } catch (const std::exception& e) {
     Emit(SessionEventType::Log, id, id + ": unusable device configuration: " + e.what());
+    return false;
+  }
+}
+
+void SessionImpl::LoadPreinit() {
+  if (preinitDir_.empty()) return;
+  std::error_code ec;
+  std::vector<std::filesystem::path> files;
+  for (const auto& e : std::filesystem::directory_iterator(preinitDir_, ec))
+    if (e.path().extension() == ".json") files.push_back(e.path());
+  std::sort(files.begin(), files.end());
+  std::lock_guard lock(mutex_);
+  for (const auto& file : files) {
+    const std::string config = ReadFile(file.string());
+    // The serial: a file named like one (LHR-0704E07A.json, as `lhtool configs` saves
+    // them), else the config's own (wired headsets' configs say "LHR-XXXXXXXX").
+    std::string id = file.stem().string();
+    std::transform(id.begin(), id.end(), id.begin(), [](unsigned char c) { return char(std::toupper(c)); });
+    try {
+      const json j = json::parse(config);
+      if (id.rfind("LHR-", 0) != 0) id = j.value("device_serial_number", "");
+    } catch (const std::exception& e) {
+      Emit(SessionEventType::Log, "", "preinit " + file.string() + ": " + e.what(), LogLevel::Warn);
+      continue;
+    }
+    if (id.empty()) {
+      Emit(SessionEventType::Log, "", "preinit " + file.string() + ": no serial (name the file <serial>.json)", LogLevel::Warn);
+      continue;
+    }
+    if (devices_.count(id)) continue;
+    preinitFiles_[id] = file.string();
+    auto& d = devices_[id];
+    d.info.serial = id;
+    if (SetUpDevice(id, config))  // created, but not attached: disconnected until it connects
+      Emit(SessionEventType::Log, id, id + ": preinitialized from " + file.filename().string() + " (disconnected)");
+  }
+}
+
+void SessionImpl::UpdatePreinit(const DeviceId& id, const std::string& config) {
+  const auto file = preinitFiles_.find(id);
+  if (file == preinitFiles_.end()) return;
+  try {
+    // Same JSON (formatting aside): keep the file as it is.
+    if (json::parse(ReadFile(file->second)) == json::parse(config)) return;
+    const std::string temp = file->second + ".tmp";
+    {
+      std::ofstream out(temp, std::ios::binary | std::ios::trunc);
+      out << config;
+      if (!out) throw std::runtime_error("cannot write " + temp);
+    }
+    std::filesystem::rename(temp, file->second);
+    Emit(SessionEventType::Log, id, id + ": device config differs from preinit; using the device's and updating " + file->second);
+  } catch (const std::exception& e) {
+    Emit(SessionEventType::Log, id, id + ": updating preinit " + file->second + ": " + e.what(), LogLevel::Warn);
   }
 }
 
