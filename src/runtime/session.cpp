@@ -223,6 +223,9 @@ class SessionImpl final : public Session, public InputSinkBase {
     double clockOffset = 0;
     bool haveClock = false;
     bool attached = false;
+    // Preinitialized and never attached yet: reported connected (uninitialized) so hosts
+    // that only take devices at startup (Monado) keep it. Cleared on the first attach.
+    bool preinitConnected = false;
     double lastData = -1e300;  // host time
     TrackingState lastState = TrackingState::Disconnected;
     // Light mode (live only): 0 = LH1 pulses, 1 = LH2 words; -1 not set yet.
@@ -502,6 +505,7 @@ void SessionImpl::OnDeviceAttached(const DeviceId& id, const std::string& config
   const bool wasAttached = d.attached;
   const std::string config = configJson.empty() ? d.info.configJson : configJson;
   d.attached = true;
+  d.preinitConnected = false;
   d.info.serial = id;
   d.lastData = now_;
   if (config.empty() || (wasAttached && d.tracker && d.info.configJson == config)) {
@@ -610,8 +614,11 @@ void SessionImpl::LoadPreinit() {
     preinitFiles_[id] = file.string();
     auto& d = devices_[id];
     d.info.serial = id;
-    if (SetUpDevice(id, config))  // created, but not attached: disconnected until it connects
-      Emit(SessionEventType::Log, id, id + ": preinitialized from " + file.filename().string() + " (disconnected)");
+    if (SetUpDevice(id, config)) {  // created, not attached: connected but uninitialized until it connects
+      // Not a headset: a "connected" one would start the stock driver's display for nothing.
+      d.preinitConnected = d.info.role != DeviceRole::Hmd;
+      Emit(SessionEventType::Log, id, id + ": preinitialized from " + file.filename().string() + " (uninitialized)");
+    }
   }
 }
 
@@ -1010,10 +1017,10 @@ SessionSnapshot SessionImpl::Snapshot() const {
     if (!d.tracker) continue;  // receivers / devices without a usable tracking config
     DeviceState s;
     s.info = d.info;
-    s.info.connected = d.attached && now_ - d.lastData < 1.0;
+    s.info.connected = d.preinitConnected || (d.attached && now_ - d.lastData < 1.0);
     s.info.enabled = Enabled(id);
     s.pose = MakePose(d);
-    if (!s.info.connected || !s.info.enabled) {
+    if (!s.info.connected || !s.info.enabled || d.preinitConnected) {
       s.pose.state = TrackingState::Disconnected;
       s.pose.valid = false;
       s.pose.result = TrackingResult::Uninitialized;
