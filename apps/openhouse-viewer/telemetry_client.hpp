@@ -36,7 +36,7 @@ struct Device {
 struct Base {
   std::string serial, channel;
   int mode = 0, observations = 0, faults = 0;
-  bool seen = false, placed = false, origin = false, locked = false;
+  bool seen = false, placed = false, origin = false, locked = false, learned = false;
   double sigma = 0;
   std::array<double, 3> p{};
   std::array<double, 4> q{1, 0, 0, 0};

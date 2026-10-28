@@ -71,6 +71,17 @@ inline std::string SteamConfigDirectory() {
   if (auto dir = Env("LH_STEAM_CONFIG_DIR"); !dir.empty()) return dir;
   return SteamRoot() + "/config/lighthouse";
 }
+// openhouse's own data (recordings, the installer's files): %LOCALAPPDATA%\openhouse,
+// ~/.local/share/openhouse.
+inline std::string DataDirectory() {
+#ifdef _WIN32
+  auto dir = Env("LOCALAPPDATA");
+  return (dir.empty() ? Home() + "/AppData/Local" : dir) + "/openhouse";
+#else
+  auto dir = Env("XDG_DATA_HOME");
+  return (dir.empty() ? Home() + "/.local/share" : dir) + "/openhouse";
+#endif
+}
 // SteamVR's own record of where it is installed: openvrpaths.vrpath, "runtime" (a list,
 // SteamVR first; other OpenVR runtimes such as xrizer may follow). Works for any Steam
 // library and for a driver installed outside SteamVR's folder.

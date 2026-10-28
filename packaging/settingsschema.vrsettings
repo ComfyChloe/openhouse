@@ -6,7 +6,7 @@
             {
                 "name": "/settings/driver_openhouse/predictWithAcceleration",
                 "control": "toggle",
-                "label": "Predict fast swings with acceleration",
+                "label": "Acceleration prediction",
                 "show_without_hmd": true
             },
             {
@@ -27,6 +27,18 @@
                 "max": 150,
                 "step": 5,
                 "decimals": 0,
+                "show_without_hmd": true
+            },
+            {
+                "name": "/settings/driver_openhouse/record",
+                "control": "toggle",
+                "label": "Record tracking data (saved in the openhouse folder)",
+                "show_without_hmd": true
+            },
+            {
+                "name": "/settings/driver_openhouse/resetRoom",
+                "control": "toggle",
+                "label": "Reset room (relearns every base station)",
                 "show_without_hmd": true
             }
         ]

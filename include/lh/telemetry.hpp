@@ -9,15 +9,19 @@
 //   hello  {"type":"hello","protocol":1,"name":"openhouse","host":"...","pid":N}
 //   log    {"type":"log","t":S,"level":"DEBUG|INFO|WARN|ERR","serial":"...","text":"..."}
 //   state  {"type":"state","t":S,
-//           "room":{"id":"...","settled":B,"epoch":N,"settleSigma":M},
+//           "room":{"id":"...","settled":B,"epoch":N,"settleSigma":M,"resets":N,
+//                   "learned":N,"seen":N},
 //           "bases":[{"serial","channel","mode","seen","placed","origin","locked",
-//                     "observations","sigma","p":[x,y,z],"q":[w,x,y,z],"faults"}],
+//                     "observations","sigma","learned","status","p":[x,y,z],"q":[w,x,y,z],"faults"}],
 //           "devices":[{"serial","role","model","connected","enabled","battery","charging",
-//                       "state","valid","p","q","v","primary","bases":[...],
-//                       "coverage":[{"base","frames","sensors"}]}],
+//                       "state","result","valid","p","q","v","primary","bases":[...],
+//                       "coverage":[{"base","frames","sensors"}],"basesSeen":N}],
 //           "receivers":[{"serial","connected"}]}
 //
-// Positions are metres in the driver's room frame; sigma metres (1-sigma, per axis).
+// Positions are metres in the driver's room frame; sigma metres (1-sigma, total). A base's
+// "status" is "not seen", "not placed", "learning" or "learned" ("learned": good enough
+// to track and align against; the room settles once every seen base is). "resets" bumps
+// when the room is reset (SteamVR settings, or its file deleted while running).
 #pragma once
 
 namespace lh::telemetry {

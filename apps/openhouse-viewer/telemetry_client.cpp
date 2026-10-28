@@ -79,6 +79,7 @@ void TelemetryClient::Handle(const std::string& line) {
       x.locked = b.value("locked", false);
       x.observations = b.value("observations", 0);
       x.sigma = b.value("sigma", 0.0);
+      x.learned = b.value("learned", x.locked || x.sigma <= 0.005);
       x.faults = b.value("faults", 0);
       x.p = Array<3>(b.value("p", json()), x.p);
       x.q = Array<4>(b.value("q", json()), x.q);

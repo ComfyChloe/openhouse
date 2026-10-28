@@ -23,6 +23,7 @@ struct RoomStatus {
   bool settled = false;
   unsigned long long epoch = 0;
   double settleSigma = 0;  // m: what a base needs to count as placed
+  unsigned long long resets = 0;  // room resets this session
 };
 
 class TelemetryServer {

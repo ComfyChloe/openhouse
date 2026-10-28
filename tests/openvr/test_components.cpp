@@ -303,10 +303,11 @@ TEST(RoomPublisher, SettlesAfterTheRoomStopsMovingAndBumpsTheEpochOnARealChange)
   Eigen::Isometry3d a = Eigen::Isometry3d::Identity(), b = Eigen::Isometry3d::Identity();
   b.translation() = Eigen::Vector3d(3, 0, 1);
   auto room = [&](double sigmaB) {
-    return std::vector<RoomSettle::Base>{{"LHB-A", true, true, a, 0}, {"LHB-B", true, true, b, sigmaB}};
+    return std::vector<RoomSettle::Base>{{"LHB-A", true, true, a, 0, false, true},
+                                         {"LHB-B", true, true, b, sigmaB, false, sigmaB <= RoomSettle::kMaxSigma}};
   };
   double t = 0;
-  EXPECT_FALSE(s.Update({{"LHB-A", true, true, a, 0}, {"LHB-B", true, false, b, 0}}, t));  // B not placed
+  EXPECT_FALSE(s.Update({{"LHB-A", true, true, a, 0, false, true}, {"LHB-B", true, false, b, 0, false, true}}, t));  // B not placed
   for (; t < 2.9; t += 0.25) EXPECT_FALSE(s.Update(room(0.001), t)) << t;
   for (; t < 8; t += 0.25) {  // B moves 2.4 cm per second: never still
     b.translation().x() += 0.006;
@@ -462,7 +463,8 @@ TEST(Telemetry, ServesHelloBacklogStateAndLogsOnLoopback) {
   base.serial = "LHB-D7B1AD76";
   base.seen = base.known = true;
   base.channel = "3";
-  base.positionVariance = 3 * 0.017 * 0.017;
+  base.positionVariance = 0.017 * 0.017;
+  base.sigma = 0.017;
   snapshot.bases.push_back(base);
   snapshot.roomId = "steamvr-1";
   server.PublishState(2.0, snapshot, {}, {}, {false, 3, 0.005});

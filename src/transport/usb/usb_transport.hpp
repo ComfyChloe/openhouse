@@ -11,6 +11,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <set>
 #include <thread>
@@ -90,6 +91,9 @@ class UsbTransport {
 
   std::vector<EndpointInfo> Endpoints() const;
   bool CaptureHealthy() const { return capture_.Healthy(); }
+  // Starts (a path) or stops (empty) a .lhraw capture while running; every open device is
+  // written first, so the file replays like one started with the session.
+  void SetCapture(const std::string& path);
   // Queued to the HID reader: never issue feature reports from host callbacks.
   void Haptic(const DeviceId& serial, double frequency, double amplitude, double duration);
   void PowerOff(const DeviceId& serial);
@@ -151,6 +155,9 @@ class UsbTransport {
   std::vector<Open> pending_;
   std::mutex pendingMutex_;
   std::atomic<bool> havePending_{false};
+  std::mutex captureMutex_;
+  std::optional<std::string> captureRequest_;
+  std::atomic<bool> haveCaptureRequest_{false};
   std::thread probe_;
   // Paths of every interface open (or idle) now; the reader thread drops a path when
   // its interface goes away, so a replugged receiver is opened again.

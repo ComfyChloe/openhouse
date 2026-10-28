@@ -27,6 +27,16 @@ const char* RoleName(DeviceRole role) {
   return "tracker";
 }
 
+const char* ResultName(TrackingResult result) {
+  switch (result) {
+    case TrackingResult::CalibratingInProgress: return "calibrating";
+    case TrackingResult::CalibratingOutOfRange: return "calibrating, out of range";
+    case TrackingResult::RunningOk: return "ok";
+    case TrackingResult::RunningOutOfRange: return "out of range";
+    default: return "uninitialized";
+  }
+}
+
 const char* StateName(TrackingState state) {
   switch (state) {
     case TrackingState::Disconnected: return "disconnected";
@@ -101,10 +111,13 @@ void TelemetryServer::PublishState(double time, const SessionSnapshot& snapshot,
     const auto& q = b.worldFromBase.orientation;
     bases.push_back({{"serial", b.serial}, {"channel", b.channel}, {"mode", b.mode}, {"seen", b.seen}, {"placed", b.known},
                      {"origin", b.origin}, {"locked", b.locked}, {"observations", b.observations},
-                     {"sigma", b.origin ? 0.0 : std::sqrt(std::max(b.positionVariance, 0.0) / 3)},
+                     {"sigma", b.sigma}, {"learned", b.known && b.learned},
+                     {"status", !b.seen && !b.known ? "not seen" : !b.known ? "not placed" : b.learned ? "learned" : "learning"},
                      {"p", json::array({p[0], p[1], p[2]})}, {"q", json::array({q[0], q[1], q[2], q[3]})},
                      {"faults", b.faults}});
   }
+  int learned = 0, seenBases = 0;
+  for (const auto& b : snapshot.bases) { seenBases += b.seen; learned += b.seen && b.known && b.learned; }
   json devices = json::array();
   for (const auto& d : snapshot.devices) {
     if (d.info.role == DeviceRole::BaseStation) continue;
@@ -114,7 +127,11 @@ void TelemetryServer::PublishState(double time, const SessionSnapshot& snapshot,
     const auto& p = pose.worldFromHead.position;
     const auto& q = pose.worldFromHead.orientation;
     json coverage = json::array();
-    for (const auto& c : pose.coverage) coverage.push_back({{"base", BaseName(c.base)}, {"frames", c.frames}, {"sensors", c.sensors}});
+    int seeing = 0;
+    for (const auto& c : pose.coverage) {
+      coverage.push_back({{"base", BaseName(c.base)}, {"frames", c.frames}, {"sensors", c.sensors}});
+      seeing += c.frames > 0;
+    }
     json inFilter = json::array();
     for (uint32_t b : pose.bases) inFilter.push_back(BaseName(b));
     const auto battery = u ? u->batteryPercent : d.info.batteryPercent;
@@ -125,13 +142,14 @@ void TelemetryServer::PublishState(double time, const SessionSnapshot& snapshot,
                        {"valid", pose.valid}, {"p", json::array({p[0], p[1], p[2]})},
                        {"q", json::array({q[0], q[1], q[2], q[3]})}, {"v", Vec(pose.velocity)},
                        {"primary", pose.primaryBase ? BaseName(pose.primaryBase) : ""}, {"bases", inFilter},
-                       {"coverage", coverage}});
+                       {"coverage", coverage}, {"basesSeen", seeing}, {"result", ResultName(pose.result)}});
   }
   json rx = json::array();
   for (const auto& r : receivers) rx.push_back({{"serial", r.serial}, {"connected", r.connected}});
   const std::string line =
       json{{"type", "state"}, {"t", time},
-           {"room", {{"id", snapshot.roomId}, {"settled", room.settled}, {"epoch", room.epoch}, {"settleSigma", room.settleSigma}}},
+           {"room", {{"id", snapshot.roomId}, {"settled", room.settled}, {"epoch", room.epoch}, {"settleSigma", room.settleSigma},
+                     {"resets", room.resets}, {"learned", learned}, {"seen", seenBases}}},
            {"bases", bases}, {"devices", devices}, {"receivers", rx}}
           .dump(-1, ' ', false, json::error_handler_t::replace) + "\n";
   std::lock_guard lock(mutex_);

@@ -54,7 +54,7 @@ void PlacementText(const Base& b, double settleSigma) {
   if (b.origin) ImGui::TextColored(kGood, "Reference point");
   else if (b.locked) ImGui::TextColored(kGood, "Locked");
   else if (!b.placed) ImGui::TextColored(kWarn, "Not placed yet");
-  else if (b.sigma <= settleSigma) ImGui::TextColored(kGood, "Placed (%.1f mm)", b.sigma * 1000);
+  else if (b.learned) ImGui::TextColored(kGood, "Placed (%.1f mm)", b.sigma * 1000);
   else ImGui::TextColored(kWarn, "Learning (%.0f mm, needs %.0f)", b.sigma * 1000, settleSigma * 1000);
 }
 
@@ -80,8 +80,7 @@ void DrawRoom(const State& s) {
   for (const auto& b : s.bases) {
     if (!b.seen) continue;
     ++visible;
-    // As the driver settles: a locked base counts (up to 20 mm, RoomSettle::kLockedMaxSigma).
-    if (b.origin || (b.placed && (b.sigma <= s.room.settleSigma || (b.locked && b.sigma <= 0.02)))) continue;
+    if (b.origin || (b.placed && b.learned)) continue;  // as the driver settles
     if (!worst || b.sigma > worst->sigma) worst = &b;
   }
   if (visible == 0) {
@@ -310,7 +309,7 @@ void DrawMap(const State& s) {
   // Base stations: a small pyramid along the direction they sweep (-z of the base).
   for (const auto& b : s.bases) {
     if (!b.placed) continue;
-    const ImU32 col = U32(!b.seen ? kOff : (b.origin || b.locked || b.sigma <= s.room.settleSigma) ? kGood : kWarn);
+    const ImU32 col = U32(!b.seen ? kOff : (b.origin || b.learned) ? kGood : kWarn);
     const V3 tip = b.p;
     const double l = 0.35, w = 0.18;
     const V3 corners[4] = {Add(tip, Rotate(b.q, {-w, -w, -l})), Add(tip, Rotate(b.q, {w, -w, -l})),

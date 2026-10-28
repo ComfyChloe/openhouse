@@ -116,6 +116,9 @@ class RoomMap {
   std::vector<uint32_t> TakeRelearned() { std::vector<uint32_t> out; out.swap(relearned_); return out; }
   // Drops all base poses of the active room.
   void ResetActive();
+  // Drops every room and all session learning (as a fresh start without a file); base
+  // calibrations and OOTX frames are kept. The next OnBaseSeen starts a new room.
+  void ForgetAll();
 
   std::vector<std::string> TakeLogs();
   // Diagnostics: a frozen room is never learned from or refined.

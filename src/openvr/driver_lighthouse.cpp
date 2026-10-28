@@ -57,6 +57,7 @@ constexpr const char* kStockFile = "driver_lighthouse.so.stock";
 #include "haptic_routing.hpp"
 #include <set>
 #include "platform/platform.hpp"
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #ifdef _WIN32
@@ -188,6 +189,7 @@ struct DeviceStatic {
   lh::DeviceRole role = lh::DeviceRole::Tracker;
   std::string baseChannel;  // base stations: "A" "b" "c", lhbs multi "1".."4"
   lh::ControllerType controllerType = lh::ControllerType::Index;
+  bool lh2 = false;         // base stations: a 2.0 one
 };
 
 class Device : public ITrackedDeviceServerDriver {
@@ -263,6 +265,27 @@ class Device : public ITrackedDeviceServerDriver {
     if (channel == info_.baseChannel) return;
     info_.baseChannel = channel;
     if (active_) VRProperties()->SetStringProperty(container_, Prop_ModeLabel_String, channel.c_str());
+  }
+  // 1.0 or 2.0 base station: model, render model and status icons to match.
+  void SetLh2(bool lh2) {
+    if (lh2 == info_.lh2) return;
+    info_.lh2 = lh2;
+    if (active_) BaseLook(container_);
+  }
+  void BaseLook(PropertyContainerHandle_t c) {
+    auto* props = VRProperties();
+    const bool two = info_.lh2;
+    props->SetStringProperty(c, Prop_ManufacturerName_String, two ? "Valve" : "HTC");
+    props->SetStringProperty(c, Prop_ModelNumber_String, two ? "Valve SR Imp" : "HTC V2-XD/XE");
+    props->SetStringProperty(c, Prop_RenderModelName_String, two ? "lh_basestation_valve_gen2" : "lh_basestation_vive");
+    const std::string icons = two ? "{lighthouse}/icons/base2_status_" : "{htc}/icons/base_status_";
+    props->SetStringProperty(c, Prop_NamedIconPathDeviceOff_String, (icons + "off.png").c_str());
+    props->SetStringProperty(c, Prop_NamedIconPathDeviceSearching_String, (icons + "searching.gif").c_str());
+    props->SetStringProperty(c, Prop_NamedIconPathDeviceSearchingAlert_String, (icons + "searching_alert.gif").c_str());
+    props->SetStringProperty(c, Prop_NamedIconPathDeviceReady_String, (icons + "ready.png").c_str());
+    props->SetStringProperty(c, Prop_NamedIconPathDeviceReadyAlert_String, (icons + "ready_alert.png").c_str());
+    props->SetStringProperty(c, Prop_NamedIconPathDeviceNotReady_String, (icons + "error.png").c_str());
+    props->SetStringProperty(c, Prop_NamedIconPathDeviceStandby_String, (icons + "standby.png").c_str());
   }
   void SetUniverse(uint64_t universe) {
     if (!active_ || universe == universe_) return;
@@ -356,8 +379,12 @@ class Device : public ITrackedDeviceServerDriver {
     p.qDriverFromHeadRotation = {1, 0, 0, 0};
     p.qRotation = Quat(b.worldFromBase.orientation);
     for (int i = 0; i < 3; ++i) p.vecPosition[i] = b.worldFromBase.position[size_t(i)];
-    p.result = b.known ? TrackingResult_Running_OK : TrackingResult_Uninitialized;
-    p.poseIsValid = b.known;
+    // Until it's locked (or is the origin) it shows as searching (a blinking icon): its
+    // place can still move. Learned but not locked yet: calibrating.
+    const bool settled = b.known && (b.origin || b.locked);
+    p.result = !b.known ? TrackingResult_Uninitialized : settled ? TrackingResult_Running_OK
+                                                                 : TrackingResult_Calibrating_InProgress;
+    p.poseIsValid = settled;
     p.deviceIsConnected = b.seen;
     // Room orientation/alignment can change even when the base position doesn't.
     {
@@ -475,9 +502,7 @@ class Device : public ITrackedDeviceServerDriver {
         break;
       }
       case lh::DeviceRole::BaseStation: {
-        props->SetStringProperty(c, Prop_ManufacturerName_String, "HTC");
-        props->SetStringProperty(c, Prop_ModelNumber_String, "HTC V2-XD/XE");
-        props->SetStringProperty(c, Prop_RenderModelName_String, "lh_basestation_vive");
+        BaseLook(c);
         props->SetStringProperty(c, Prop_ResourceRoot_String, "htc");
         props->SetStringProperty(c, Prop_ModeLabel_String, info_.baseChannel.c_str());
         props->SetInt32Property(c, Prop_DeviceClass_Int32, TrackedDeviceClass_TrackingReference);
@@ -487,13 +512,6 @@ class Device : public ITrackedDeviceServerDriver {
         props->SetFloatProperty(c, Prop_FieldOfViewBottomDegrees_Float, 60);
         props->SetFloatProperty(c, Prop_TrackingRangeMinimumMeters_Float, 0.1f);
         props->SetFloatProperty(c, Prop_TrackingRangeMaximumMeters_Float, 7.0f);
-        props->SetStringProperty(c, Prop_NamedIconPathDeviceOff_String, "{htc}/icons/base_status_off.png");
-        props->SetStringProperty(c, Prop_NamedIconPathDeviceSearching_String, "{htc}/icons/base_status_searching.gif");
-        props->SetStringProperty(c, Prop_NamedIconPathDeviceSearchingAlert_String, "{htc}/icons/base_status_searching_alert.gif");
-        props->SetStringProperty(c, Prop_NamedIconPathDeviceReady_String, "{htc}/icons/base_status_ready.png");
-        props->SetStringProperty(c, Prop_NamedIconPathDeviceReadyAlert_String, "{htc}/icons/base_status_ready_alert.png");
-        props->SetStringProperty(c, Prop_NamedIconPathDeviceNotReady_String, "{htc}/icons/base_status_error.png");
-        props->SetStringProperty(c, Prop_NamedIconPathDeviceStandby_String, "{htc}/icons/base_status_standby.png");
         break;
       }
       default: {  // trackers (inputs ignored by design)
@@ -997,7 +1015,7 @@ class Provider : public IServerTrackedDeviceProvider {
           Log("no shared reference base for room " + snapshot_.roomId + "; host room setup is required for a standing origin");
         }
         const uint64_t universe = UniverseId(aligned && steamFrame_ ? alignment_.RoomId() : snapshot_.roomId);
-        roomPublisher_.Publish(snapshot_, rawFromWorld, now);
+        roomPublisher_.Publish(snapshot_, rawFromWorld, now, session_->RoomResets());
         if (const std::string line = roomPublisher_.TakeLog(); !line.empty()) Log(line);
         for (auto& [serial, d] : devices_) {
           d->SetRawTransform(rawFromWorld);
@@ -1015,7 +1033,8 @@ class Provider : public IServerTrackedDeviceProvider {
       if (now - lastTelemetry_ >= 0.05) {  // viewers: ~20 Hz is plenty to watch
         lastTelemetry_ = now;
         g_telemetry.PublishState(now, snapshot_, updates, session_->Receivers(),
-                                 {roomPublisher_.Settled(), roomPublisher_.Epoch(), lh::openvr::RoomSettle::kMaxSigma});
+                                 {roomPublisher_.Settled(), roomPublisher_.Epoch(), lh::openvr::RoomSettle::kMaxSigma,
+                                  session_->RoomResets()});
       }
       for (const auto& u : updates) {
         auto found = devices_.find(u.serial);
@@ -1065,6 +1084,7 @@ class Provider : public IServerTrackedDeviceProvider {
     for (const auto& b : snapshot_.bases) {
       if (const auto found = devices_.find(b.serial); found != devices_.end()) {
         if (!b.channel.empty()) found->second->SetChannel(b.channel);
+        found->second->SetLh2(b.lh2);
         continue;
       }
       if (!b.seen) continue;
@@ -1072,6 +1092,7 @@ class Provider : public IServerTrackedDeviceProvider {
       info.serial = b.serial;
       info.role = lh::DeviceRole::BaseStation;
       info.baseChannel = b.channel;
+      info.lh2 = b.lh2;
       Add(info, TrackedDeviceClass_TrackingReference);
     }
   }
@@ -1108,6 +1129,7 @@ class Provider : public IServerTrackedDeviceProvider {
   std::string warnedRoom_;
   double lastSnapshot_ = -1e300;
   double lastTelemetry_ = -1e300;
+  std::string recording_;  // the settings page's recording, while on
   double lastTuning_ = -1e300;
 
   // SteamVR settings, section driver_openhouse (the page from settingsschema.vrsettings,
@@ -1134,6 +1156,35 @@ class Provider : public IServerTrackedDeviceProvider {
     const double rotation = number("rotationSmoothingMs", 60) / 1000.0;
     const bool acceleration = flag("predictWithAcceleration", true);
     session_->SetOutputTuning(position, rotation, acceleration);
+    // Record: raw device data to <data>/recordings while on (replay with `lhtool session`).
+    const bool record = flag("record", false);
+    if (record != !recording_.empty()) {
+      if (record) {
+        const std::time_t t = std::time(nullptr);
+        char name[64];
+        std::strftime(name, sizeof name, "recording-%Y%m%d-%H%M%S.lhraw", std::localtime(&t));
+        const std::string dir = lh::platform::DataDirectory() + "/recordings";
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+        if (!ec && session_->SetCapture(dir + "/" + name)) {
+          recording_ = dir + "/" + name;
+          Log("recording to " + recording_);
+        } else {
+          Log("cannot record to " + dir);
+          VRSettings()->SetBool(kSection, "record", false);
+        }
+      } else {
+        session_->SetCapture("");
+        Log("recording saved: " + recording_);
+        recording_.clear();
+      }
+    }
+    // A one-shot switch: the settings page turns it on, we reset the room and turn it off.
+    if (flag("resetRoom", false)) {
+      VRSettings()->SetBool(kSection, "resetRoom", false);
+      Log("room reset from the SteamVR settings");
+      session_->ResetRoom();
+    }
   }
 };
 

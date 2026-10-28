@@ -308,6 +308,12 @@ void UsbTransport::Enumerate(bool startup) {
   }
 }
 
+void UsbTransport::SetCapture(const std::string& path) {
+  std::lock_guard lock(captureMutex_);
+  captureRequest_ = path;
+  haveCaptureRequest_ = true;
+}
+
 bool UsbTransport::Start() {
   if (thread_.joinable() || !open_.empty()) return false;
   decoder_ = ReportDecoder(sink_);  // no stale unwrap/protocol state after Stop/Start
@@ -553,6 +559,21 @@ void UsbTransport::Run() {
         decoder_.AddEndpoint(o.info);
         if (o.wantVersion) RequestVersion(o);
         open_.push_back(o);
+      }
+    }
+    if (haveCaptureRequest_) {
+      std::optional<std::string> path;
+      {
+        std::lock_guard lock(captureMutex_);
+        path.swap(captureRequest_);
+        haveCaptureRequest_ = false;
+      }
+      if (path) {
+        capture_.Close();
+        if (!path->empty()) {
+          if (!capture_.Open(*path)) Log(LogLevel::Error, "cannot open capture %s\n", path->c_str());
+          else for (const auto& o : open_) capture_.WriteEndpoint(o.info);
+        }
       }
     }
     std::vector<HapticCommand> commands;

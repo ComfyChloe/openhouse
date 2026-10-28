@@ -122,11 +122,18 @@ struct BaseStationState {
   Pose worldFromBase;
   double positionVariance = 0, rotationVariance = 0;
   int mode = 0;                 // 1 A, 2 B, 3 C
+  bool lh2 = false;             // a 2.0 base station (its light is LH2 words)
   std::string channel;          // as its display shows it: "A" "b" "c", lhbs multi "1".."4"; "" unknown
   int faults = 0;
   bool origin = false;
   bool locked = false;          // placed well: only its own accelerometer moves it now
   int observations = 0;         // keyframes behind its pose (this session or saved)
+  // Learned: placed well enough to track and align against (the origin; under 5 mm;
+  // locked or 40+ keyframes under 20 mm). What "settled" and every reader go by.
+  bool learned = false;
+  double sigma = 0;             // m, position uncertainty (total, 0 for the origin)
+  static constexpr double kLearnedSigma = 0.005, kLearnedLockedSigma = 0.02;
+  static constexpr int kLearnedObservations = 40;
 };
 
 struct DeviceState {
@@ -236,6 +243,9 @@ class Session {
   virtual std::vector<Receiver> Receivers() const = 0;
   // Pairing mode on a receiver for `seconds` (0 leaves it); false if not plugged in.
   virtual bool SetPairing(const std::string& receiver, double seconds) = 0;
+  // Live USB: starts recording every raw report to this .lhraw (replayable with
+  // `lhtool session`), or stops with an empty path. False when there is nothing to record.
+  virtual bool SetCapture(const std::string& path) = 0;
   // Index only. Returns true when queued, not a hardware acknowledgement.
   // Replay/disabled devices return false. Frequency 0 selects a default.
   virtual bool Haptic(const std::string& serial, double frequency, double amplitude, double duration) = 0;
@@ -244,7 +254,11 @@ class Session {
   virtual bool PowerOff(const std::string& serial) = 0;
 
   // Forget the room map (all base poses) and relearn it.
+  // Forgets every room (as if the room map file were deleted) and relearns from scratch;
+  // the file is rewritten. Also done when the room map file is deleted while running.
   virtual void ResetRoom() = 0;
+  // Bumps on every ResetRoom (readers that hold anything room-relative drop it).
+  virtual uint64_t RoomResets() const = 0;
   virtual bool SaveRoom(std::string* error = nullptr) = 0;
 };
 

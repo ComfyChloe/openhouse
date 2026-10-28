@@ -841,6 +841,24 @@ void RoomMap::ResetActive() {
   }
 }
 
+void RoomMap::ForgetAll() {
+  rooms_.clear();
+  active_ = -1;
+  seenResetCount_.clear();
+  lastObservation_.clear();
+  relearned_.clear();
+  levelTarget_.reset();
+  levelTime_ = advanceTime_ = std::numeric_limits<double>::quiet_NaN();
+  solvedTarget_.clear();
+  levelled_ = false;
+  accel_.clear();
+  originRelearn_ = false;
+  ++originEpoch_;
+  Log("Room map forgotten; learning a new room");
+  ++revision_;
+  dirty_ = true;
+}
+
 std::vector<std::string> RoomMap::TakeLogs() {
   std::vector<std::string> out;
   out.swap(logs_);

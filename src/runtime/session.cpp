@@ -191,6 +191,16 @@ class SessionImpl final : public Session, public InputSinkBase {
       for (const auto& r : usb_->Receivers()) out.push_back({r.serial, r.connected});
     return out;
   }
+  bool SetCapture(const std::string& path) override {
+#ifdef LH_RUNTIME_USB
+    if (!usb_) return false;
+    usb_->SetCapture(path);
+    return true;
+#else
+    (void)path;
+    return false;
+#endif
+  }
   bool SetPairing(const std::string& receiver, double seconds) override {
     return usb_ && usb_->SetPairing(receiver, int(std::lround(seconds * 1000)));
   }
@@ -256,6 +266,9 @@ class SessionImpl final : public Session, public InputSinkBase {
   bool Enabled(const DeviceId& id) const { return !disabled_.count(id); }
   void CollectLogs(Device* d);
   void MaybeSave();
+  void ResetRoomLocked(const std::string& why);
+  void WatchRoomFile(bool now = false);
+  uint64_t RoomResets() const override { std::lock_guard lock(mutex_); return roomResets_; }
   void ReplayMain();
   DevicePose MakePose(const Device& d) const;
   double HostTime(const Device& d, double deviceTime) const { return deviceTime + d.clockOffset; }
@@ -267,7 +280,10 @@ class SessionImpl final : public Session, public InputSinkBase {
   std::map<uint32_t, tdm::TdmDisambiguator::Identity> identities_;
   RoomMap room_;
   std::string roomPath_, settingsPath_, preinitDir_;
-  std::map<std::string, std::string> preinitFiles_;  // serial -> preinit file
+  std::map<std::string, std::string> preinitFiles_;
+  uint64_t roomResets_ = 0;
+  bool roomFileSeen_ = false;
+  double lastRoomFileCheck_ = -1e300;  // serial -> preinit file
   bool explicitControllers_ = false;
   std::string leftController_, rightController_;
   std::set<std::string> disabled_;
@@ -940,10 +956,11 @@ void SessionImpl::SolverMain() {
     newKeyframes_ = false;
     lastSolve_ = now_;
     const RoomSolveInput input = SolveInput();
+    const uint64_t resets = roomResets_;
     lock.unlock();
     const RoomSolveOutput out = SolveRoom(input);
     lock.lock();
-    ApplySolve(out);
+    if (resets == roomResets_) ApplySolve(out);  // a reset meanwhile: solved against the old room
   }
 }
 
@@ -973,10 +990,13 @@ void SessionImpl::CollectLogs(Device* d) {
 }
 
 void SessionImpl::MaybeSave() {
+  WatchRoomFile();
   if (!persist_ || !room_.Dirty()) return;
   const double wall = SteadyNow();
   if (wall - lastSave_ < 10.0) return;
   lastSave_ = wall;
+  WatchRoomFile(true);  // never write over a deletion before it's seen
+  if (!room_.Dirty()) return;
   std::string err;
   if (room_.Save(roomPath_, &err)) room_.ClearDirty();
   else Emit(SessionEventType::Log, "", err);
@@ -1036,6 +1056,7 @@ SessionSnapshot SessionImpl::Snapshot() const {
     s.seen = b.seen;
     s.mode = b.dynamic.mode;
     // lhbs multi channels are its slot (1-4 on the display), stock ones A, b, c.
+    s.lh2 = b.dynamic.sobChannel >= 0;
     if (b.dynamic.sobChannel >= 0) s.channel = std::to_string(b.dynamic.sobChannel + 1);  // LH2: 1-16
     else if (b.dynamic.multiSlot >= 0) s.channel = std::to_string(b.dynamic.multiSlot + 1);
     else if (b.dynamic.mode >= 1 && b.dynamic.mode <= 3) s.channel = std::string(1, "Abc"[b.dynamic.mode - 1]);
@@ -1052,6 +1073,10 @@ SessionSnapshot SessionImpl::Snapshot() const {
     s.origin = rb.origin;
     s.locked = RoomMap::Locked(rb);
     s.observations = std::max(rb.observations, rb.storedObservations);
+    s.sigma = rb.origin ? 0.0 : std::sqrt(std::max(rb.positionVariance, 0.0));
+    s.learned = rb.origin || s.sigma <= BaseStationState::kLearnedSigma ||
+                ((s.locked || s.observations >= BaseStationState::kLearnedObservations) &&
+                 s.sigma <= BaseStationState::kLearnedLockedSigma);
   }
   for (auto& [serial, s] : bases)
     if (s.seen || s.known) snap.bases.push_back(s);
@@ -1176,6 +1201,8 @@ void SessionImpl::SetDeviceEnabled(const std::string& serial, bool enabled) {
     if (TrackedObjectModel::FromJson(d.info.configJson, &model)) {
       model.serial = serial;
       d.tracker = std::make_unique<DeviceTracker>(serial, model, &room_);
+      d.tracker->SetSmoothing(smoothPosition_, smoothRotation_);
+      d.tracker->SetReportAcceleration(reportAcceleration_);
       for (const auto& [base, b] : bases_) d.tracker->OnBaseConfig(b.config, b.dynamic);
       PushIdentities();
     }
@@ -1187,9 +1214,53 @@ void SessionImpl::SetDeviceEnabled(const std::string& serial, bool enabled) {
 
 void SessionImpl::ResetRoom() {
   std::lock_guard lock(mutex_);
-  room_.ResetActive();
+  ResetRoomLocked("reset requested");
+}
+
+void SessionImpl::ResetRoomLocked(const std::string& why) {
+  // Every room goes, and with it everything learned against it: keyframes, solves in
+  // flight, and each device's filter (its base frames and alt-base relationships).
+  room_.ForgetAll();
   keyframes_.Clear();
+  lastSolved_.clear();
+  solveInterval_ = 1.0;
+  newKeyframes_ = false;
+  ++roomResets_;
+  for (auto& [id, d] : devices_) {
+    if (!d.tracker) continue;
+    TrackedObjectModel model;
+    if (!TrackedObjectModel::FromJson(d.info.configJson, &model)) continue;
+    model.serial = id;
+    d.tracker = std::make_unique<DeviceTracker>(id, model, &room_);
+    d.tracker->SetSmoothing(smoothPosition_, smoothRotation_);
+    d.tracker->SetReportAcceleration(reportAcceleration_);
+    for (const auto& [base, b] : bases_) d.tracker->OnBaseConfig(b.config, b.dynamic);
+    d.lastState = TrackingState::Disconnected;
+  }
+  PushIdentities();
+  // Seen bases are seen again: the first one becomes the new room's origin.
+  for (const auto& [serial, b] : bases_)
+    if (b.seen) room_.OnBaseSeen(b.config, b.dynamic);
+  if (persist_) {
+    std::string err;
+    if (room_.Save(roomPath_, &err)) room_.ClearDirty();
+    roomFileSeen_ = true;
+  }
+  Emit(SessionEventType::RoomChanged, "", "room reset (" + why + "): every base station is relearned");
   CollectLogs(nullptr);
+}
+
+void SessionImpl::WatchRoomFile(bool now) {
+  // Deleting the room map file while running resets the room (an external switch).
+  if (!persist_ || roomPath_.empty()) return;
+  const double wall = SteadyNow();
+  if (!now && wall - lastRoomFileCheck_ < 1.0) return;
+  lastRoomFileCheck_ = wall;
+  std::error_code ec;
+  const bool exists = std::filesystem::exists(roomPath_, ec);
+  if (ec) return;
+  if (exists) roomFileSeen_ = true;
+  else if (roomFileSeen_) { roomFileSeen_ = false; ResetRoomLocked("room map file deleted"); }
 }
 
 bool SessionImpl::SaveRoom(std::string* error) {

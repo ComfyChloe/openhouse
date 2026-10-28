@@ -24,14 +24,17 @@ class RoomSettle {
   static constexpr double kMaxSigma = 0.005;     // m
   // A locked base (placed from enough evidence; only its own accelerometer moves it) is
   // as placed as it gets: it counts up to this.
-  static constexpr double kLockedMaxSigma = 0.02;  // m
+  static constexpr double kLockedMaxSigma = BaseStationState::kLearnedLockedSigma;  // m
 
   struct Base {
     std::string serial; bool visible, placed; Eigen::Isometry3d rawFromBase; double sigma; bool locked = false;
-    bool Good() const { return placed && (sigma <= kMaxSigma || (locked && sigma <= kLockedMaxSigma)); }
+    bool learned = false;  // BaseStationState::learned
+    bool Good() const { return placed && learned; }
   };
   // Returns whether the room is settled now; epoch() bumps on a new settled room.
   bool Update(const std::vector<Base>& bases, double now);
+  // The room was reset: unsettled, and the next settled room is a new epoch.
+  void Restart() { window_.clear(); settledPoses_.clear(); settled_ = false; since_ = -1; ++epoch_; }
   uint64_t epoch() const { return epoch_; }
 
  private:
@@ -50,7 +53,8 @@ class RoomPublisher {
   RoomPublisher& operator=(const RoomPublisher&) = delete;
   ~RoomPublisher() { Close(); }
   void Close();  // readers fall back to their usual route
-  void Publish(const SessionSnapshot& snapshot, const Eigen::Isometry3d& rawFromWorld, double now);
+  void Publish(const SessionSnapshot& snapshot, const Eigen::Isometry3d& rawFromWorld, double now,
+               unsigned long long roomResets = 0);
 
   // A line for the driver log when the room's settled state or set of placed bases
   // changed (empty otherwise).
@@ -62,6 +66,7 @@ class RoomPublisher {
   bool Open();
   RoomSettle settle_;
   std::string lastLogKey_, pendingLog_;
+  unsigned long long roomResets_ = 0;
   bool settled_ = false;
   openhouse_room* shm_ = nullptr;
   bool failed_ = false;
