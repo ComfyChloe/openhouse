@@ -123,7 +123,7 @@ You don't need any of these normally. On Linux, put them in SteamVR's launch opt
 |---|---|
 | `LH_LOG_LEVEL=DEBUG` | Shows DEBUG logs in SteamVR's logs (`INFO` by default, also `WARN` and `ERR`) |
 | `LH_TELEMETRY_PORT=N` | The port the viewer connects to (36840 by default, `0` turns it off) |
-| `LH_CAPTURE=DIR` | Records the session into a folder, for bug reports (see below) |
+| `LH_CAPTURE=DIR` | Records the whole session from the start into a folder (see Reporting a bug) |
 | `LH_NO_POWER_OFF_ON_EXIT=1` | Don't turn off devices when SteamVR exits, overrides SteamVR's setting |
 | `LH_STOCK_HMD=1` / `LH_NO_STOCK_HMD=1` | Always/never load SteamVR's display driver for the headset |
 | `LH_STOCK_DRIVER=PATH` | Where SteamVR's original driver is, if it's not next to ours |
@@ -144,11 +144,11 @@ You don't need any of these normally. On Linux, put them in SteamVR's launch opt
 2. Play until the problem happens and keep using it for a minute after it.
 3. Turn **Record Session** off.
 
-That saves a zip into `Documents/openhouse reports` which contains the lighthouse capture data, room map, steamvr settings and steamvr logs. Link the zip that is generated to me on either GitHub issues or through Discord/Twitter
+That saves a zip into `Documents/openhouse reports` which contains the recording, your room map, openhouse's settings files (`settings.json`, `hostframe.json`, `preinit/`) and SteamVR's logs. Link the zip that is generated to me on either GitHub issues or through Discord/Twitter
 
-If you want to record the whole session from the start, set `LH_CAPTURE=/some/folder` (or add `"capture": "C:\\lh-capture\\run1"` under `"driver_lighthouse"` in `steamvr.vrsettings`).
+If the problem happens right when SteamVR starts, set `LH_CAPTURE=/some/folder` (or add `"capture": "C:\\lh-capture\\run1"` under `"driver_lighthouse"` in `steamvr.vrsettings`) to record the whole session from the start. That recording isn't put in a zip, so send me that folder along with SteamVR's `vrserver.txt`. Don't use **Record Session** at the same time, as it takes over the recording.
 
-You can also record with `lhcapture` while playing. While it's recording, you can type a note and press enter to mark the time, like `left foot jumping`.
+You can also record without SteamVR with `lhcapture` (close SteamVR first). While it's recording, you can type a note and press enter to mark the time, like `left foot jumping`.
 
 ### Tools and the library
 - `lhcapture` records your devices' raw data.
