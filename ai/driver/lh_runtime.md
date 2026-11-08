@@ -1,7 +1,7 @@
 # liblh — the lh session runtime
 
 `liblh.so` is the driver core everything else uses: the 3D visualizer (`lhviz`),
-`lhtool session`, and later the SteamVR driver wrapper. Its only public header is
+`lhtool session`, `openhouse-compare`, the example app and the SteamVR driver. Its only public header is
 `include/lh/session.hpp` (plain data types, no Eigen/transport types).
 
 ```
@@ -42,7 +42,7 @@ Here the room map is shared and authoritative:
 
 The per-device filter is the verified port of `CLighthouseDirect`
 (`src/tracking/lighthouse_direct.*`), so the filter math is still the oracle-verified
-EKF (see `ai/driver/VALIDATION.md`).
+EKF (the oracle tests in `tests/oracle`).
 
 ## Room map (`src/runtime/room_map.*`)
 

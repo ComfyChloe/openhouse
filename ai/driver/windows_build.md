@@ -5,9 +5,11 @@
 `scripts/build-windows.sh` builds and packages:
 
 * `build-win64/openvr/lighthouse/bin/win64/driver_lighthouse.dll`;
-* `liblh.dll`, `lhviz.exe`, `lhtool.exe`, `lhcapture.exe`;
-* `dist/lh-windows-x64.zip` — stripped binaries, dependency notices, hashes and
-  an optional backup/restore installer.
+* `apps/`: `liblh.dll`, `openhouse-viewer.exe`, `openhouse-compare.exe`, `lhviz.exe`,
+  `lhtool.exe`, `lhcapture.exe`, `openhouse-check.exe`;
+* `dist/openhouse-windows-x64.zip`: stripped binaries, `LICENSE.txt`, dependency notices
+  (`licenses/`), `BUILD.json` (hashes), the settings page schema, and the installer
+  (`Install-Driver.bat` / `Uninstall-Driver.bat` run `openhouse-driver.ps1`).
 
 The driver DLL is self-contained: Ceres, glog/gflags, hidapi, zlib and compiler
 runtimes are statically linked. PE import inspection checks that it needs only
@@ -49,27 +51,15 @@ python3 scripts/package-windows.py build-win64 "$VCPKG_ROOT/installed/x64-mingw-
 baseline, artifact hashes and PE imports. Do not mistake an artifact built from a
 dirty tree for that commit alone.
 
-## Windows installation
+## Windows installer (`scripts/windows-driver.ps1`)
 
-Close SteamVR. Extract the ZIP completely. In PowerShell from the extracted folder:
-
-```
-powershell -ExecutionPolicy Bypass -File .\Install-Driver.ps1 Install
-# Nonstandard location:
-powershell -ExecutionPolicy Bypass -File .\Install-Driver.ps1 Install -SteamVRPath "D:\SteamLibrary\steamapps\common\SteamVR"
-# Restore:
-powershell -ExecutionPolicy Bypass -File .\Install-Driver.ps1 Restore
-```
-
-The installer checks for running hosts, backs up the original as
-`driver_lighthouse.dll.stock`, and verifies the installed file hash. Its path
-lookup uses OpenVR's runtime path file, then Steam's registry path. It has **not**
-been executed on a native Windows machine.
-
-Manual installation is also possible: back up and replace only
-`SteamVR\drivers\lighthouse\bin\win64\driver_lighthouse.dll`. Keep SteamVR's existing
-manifest, models, input profiles, and hand assets. No HMD display support is
-provided, just as in the Linux build. The Linux `.so` and installer are untouched.
+Shipped as `openhouse-driver.ps1` behind `Install-Driver.bat` / `Uninstall-Driver.bat`.
+It refuses to run while a host is running, keeps the stock DLL as
+`driver_lighthouse.dll.stock` (needed for the headset display), verifies the installed
+hash, installs the settings page schema (an existing one is kept as `.stock`), and
+registers the update check (`openhouse-check.exe` in `%LOCALAPPDATA%\openhouse`,
+autolaunched overlay). SteamVR is found through OpenVR's runtime path file, then
+Steam's registry path; `-SteamVRPath` overrides. Uninstall reverses all of it.
 
 ## Platform handling
 
@@ -110,9 +100,8 @@ xvfb-run -a ctest --test-dir build-win64 --output-on-failure -j4
 ```
 
 Set `LH_HAND_POSES` to the installed Valve GLB's Windows/Wine path to enable
-asset-dependent skeletal checks. Native Windows SteamVR, physical Windows USB,
-haptics, power-off and reconnect still need hardware testing. Wine passing does
-not prove native hardware correctness or tracking parity with Valve's driver.
+asset-dependent skeletal checks. Wine passing does not prove native hardware behaviour; the owner and testers run the
+release on native Windows.
 
 ## Size
 

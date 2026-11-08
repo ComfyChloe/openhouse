@@ -50,11 +50,11 @@ Goals and constraints (from the owner):
 | `src/openvr` | the OpenVR driver (devices, inputs, skeleton, host frame, room publisher, stock HMD, pairing, telemetry server) |
 | `src/common` | small shared pieces (loopback sockets) |
 | `src/platform` | OS helpers (paths, precise sleep) |
-| `apps/` | `openhouse-viewer` (live status of the running driver), `lhtool` (replay/session/track), `lhcapture` (recorder), `lhviz` (developer viewer), `openhouse-check` (update check) |
+| `apps/` | `openhouse-viewer` (live status of the running driver, bug report button), `openhouse-compare` (openhouse vs the stock driver side by side; hosts the stock DLL in-process), `lhtool` (replay/session/track), `lhcapture` (recorder), `lhviz` (developer viewer), `openhouse-check` (update check), `example_app` (standalone CMake example for users of `lh::Session`) |
 | `tests/` | unit, runtime, OpenVR component/mock-host, oracle tests (load the original binary) |
-| `tools/` | `eval_replay.sh/.py` (tracking scorer), RE helpers |
+| `tools/` | `eval_replay.sh/.py` (tracking scorer) |
 | `scripts/` | Release builds (`build-linux.sh`, `build-windows.sh`, `build-firmware.sh`) and the packagers they call (`package-linux.sh`, `package-driver.py`, `package-windows.py`, `package-firmware.py`), the Windows installer script |
-| `basestation_firmware` | the firmware (`src/`, `test/`, `Makefile`); `tools/` flashing and console; `installer/` the end-user installers (Linux sh, Windows ps1/bat). `fw/`, `patches/`, `re/`, `bsfirmwares/`, `backups/` are local only |
+| `basestation_firmware` | the firmware (`src/`, `test/`, `Makefile`); `tools/lpcsum.py` (boot checksum, run by the Makefile); `installer/` the end-user installers (Linux sh, Windows ps1/bat). `fw/`, `patches/`, `re/`, `bsfirmwares/`, `backups/` are local only |
 | `re/ghidra_scripts` | headless Ghidra scripts. The rest of `re/` (project, decompiles) is local only |
 
 Not in git, on purpose: Valve's binaries, decompiled code, HTC firmware images and flash
@@ -64,17 +64,20 @@ dumps, `libsurvive/` (reference only: LH2 polynomials and decode), recordings.
 
 ```sh
 cmake -S . -B build-linux -G Ninja && cmake --build build-linux -j$(nproc)
-ctest --test-dir build-linux -j4 --output-on-failure      # 10 tests; oracle tests skip without fixtures
+ctest --test-dir build-linux -j4 --output-on-failure      # 9 tests; oracle tests skip without fixtures
 scripts/build-linux.sh && dist/openhouse-driver/install.sh   # close SteamVR / Monado / WiVRn first
 ```
 
-Windows: MSVC builds are preferred (native SteamVR). The project builds with the VS 2026
-generator and vcpkg static triplets; `triplets/x64-windows-static-avx2.cmake` builds every
-dependency with AVX2 (Eigen's alignment must match across all of them, or the heap is
-corrupted). OpenVR headers: any `openvr_driver.h` (2.15.6 used). The MinGW cross-build
-(`scripts/build-windows.sh`, `driver/windows_build.md`) also works. On Windows the stock
-`driver_lighthouse.dll` is replaced in `SteamVR\drivers\lighthouse\bin\win64` (keep the stock
-one as `.stock`).
+Release packages (each builds and packages; nothing is installed):
+* `scripts/build-linux.sh`: static vcpkg Ceres (no SuiteSparse: its SPQR/CHOLMOD are GPL and
+  `package-driver.py` refuses to bundle them) into `build-release`, then `package-linux.sh`.
+  `package-linux.sh` alone packages whatever `build-release` holds; it doesn't build.
+* `scripts/build-windows.sh`: MinGW cross-build (`driver/windows_build.md`).
+* `scripts/build-firmware.sh`: lhbs + host test + installers.
+
+Packaging deletes `dist/openhouse-driver/` (and the Windows/firmware dirs): move anything
+the owner keeps there first. The version is `include/lh/version.hpp`, kept in sync with
+`project(... VERSION)` and `vcpkg.json`.
 
 ## Evaluating tracking changes
 
@@ -87,10 +90,10 @@ against a copy of the room map** (`~/.config/lh/roommap.json`, Windows
 Captures (owner's machine; ask for them if absent):
 * `~/lh-captures/vrchat-01`: 10 min VRChat, 5 devices: the main regression capture.
 * `~/lh-captures/testswing`: 24 s of violent swings. `~/lh-captures/ms4-01`: bases on/off.
-* `/mnt/lh-captures/beatsaber-01`, `-01-2`, `-01-3`: fast Beat Saber play. Fly-aways
-  reproduce only from some starting points: replay each with `lhtool session ... --from F`
-  for F in 0 120 200 230 260 and count "out of bounds" resets. Beat Saber is the owner's
-  top priority: a change must keep these clean.
+* `~/lh-captures/fastmotionindex`, `fastmotion3`-`5`: fast swings, the stand-in for Beat
+  Saber (the original Beat Saber captures are gone). Fly-aways reproduce only from some
+  starting points: replay with several `--from` values and count "out of bounds" resets.
+  Fast motion is the owner's top priority: a change must keep these clean.
 
 Logs and diagnostics: every message has a level (DEBUG/INFO/WARN/ERR). Replays print
 them with `lhtool session` (`"level"` field); live, the host log gets INFO+ unless
@@ -108,29 +111,33 @@ a Vive headset (LHR-0704E07A). Quest Pro through WiVRn for VRChat.
 Alignment tools can read the room from `/openhouse-room-<uid>` (`include/lh/room_shm.h`;
 copies of that header in other projects must stay identical).
 
-## State of the work (2026-10-25)
+## State of the work (2026-11-08)
 
-Done recently:
-* Release clean-up: renamed to openhouse, debug/A-B switches removed, log levels,
-  copied Valve text removed, README written.
-* `openhouse-viewer` + driver telemetry (`src/openvr/telemetry_server.*`).
-* Room locks (well-placed bases only move on their accelerometer), stale-room detection
-  (turned origin -> new room), transport messages in the session log.
-* Headset hybrid (stock display, our pose), SteamVR pairing menu, roles, hand slots,
-  power-off on exit, configs read from devices per session.
-* lhbs firmware installer (`basestation_firmware/installer`); the Windows script is
-  untested on Windows.
+Released as openhouse 1.0. Recent work, all in the tree:
+* Rooms: one "learned" rule (`BaseStationState::learned`: origin, <= 5 mm, or locked / 40+
+  keyframes <= 20 mm) drives settling, the SteamVR base status (searching until locked),
+  telemetry and the viewer. `Session::ResetRoom` forgets every room and rebuilds the
+  trackers; deleting `roommap.json` while running does the same.
+* SteamVR settings page (`packaging/settingsschema.vrsettings`, section `driver_openhouse`):
+  smoothing, acceleration prediction, Record Session (turning it off saves the bug report
+  zip, `lh/bug_report.hpp`), Reset room. Only toggles/sliders/selects exist there; one-shot
+  actions are toggles the driver turns back off.
+* Base stations show the 2.0 or 1.0 model and icons from how they're tracked.
+* Preinit devices (`~/.config/lh/preinit`) are reported connected-but-uninitialized until
+  they first connect (Monado only takes devices at startup).
+* The pairing mailbox logs every request and reply (`pairing:` lines in vrserver.txt).
 
 Open:
-* A base seen well by only one device (the owner's channel 3, `D7B1AD76`, which mostly
-  sees one corner) never reaches the lock and gets relearned from poor views; the still
-  headset tracking from it moves with it (`test2still`). Next: weight keyframes by how
-  well the device sees both bases, or require two devices before re-placing.
-* Fly-aways right after a reacquire or a base newly used from the room map (friend's
-  `live3-4`, 2.0): the contradiction check now catches them within ~1 s; the cause (the
-  relationship the filter takes) is open.
-* Windows: test the viewer, the firmware installer and the telemetry port on real
-  Windows.
+* A friend's Windows PC with no headset shows the pairing page stuck on "Initializing"
+  (no reply reached it). It works on the owner's Windows install; their `pairing:` log
+  lines are needed.
+* A base seen well by only one device never locks and gets relearned from poor views.
+* Fly-aways right after a reacquire or a base newly used from the room map.
+* `openhouse-compare`: the stock side declines headsets (their Activate needs SteamVR
+  internals the host lacks); both drivers share the dongles, so either side's glitches
+  can be the other's commands.
+* lhbs `b`/`c` channels once came up sweeping in the same phase (both drivers saw it);
+  a power cycle of the `c` base fixed it. Not reproduced since.
 
 ## Hard-won lessons
 
@@ -152,7 +159,7 @@ Open:
 
 `driver/` (the driver and library):
 * Overview: `SYSTEM_OVERVIEW.md` (end to end), `ARCHITECTURE.md` (the original's design),
-  `usage.md` (build/run/API), `PROGRESS.md`, `VALIDATION.md`, `closing_the_gap.md`.
+  `usage.md` (build/run/API), `PROGRESS.md` (port history: what came from which address).
 * Transport: `usb_protocol.md`, `wireless_protocol.md`, `capture.md`, `source_layer.md`.
 * Tracking: `disambiguator_tdm.md`, `multistation_plan.md`, `pose_solver.md`,
   `lighthouse_direct.md`, `state_vector.md`, `measurement_models.md`, `sensor_type.md`,

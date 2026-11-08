@@ -84,10 +84,9 @@ See `ai/driver/openvr_driver.md` for actual-host results and remaining verificat
   and `lhviz` are usable; see the root README for commands.
 - New primary-path oracle tests cover original IMU saturation handling and optical
   update orchestration (facing, grazing noise, angular outliers, update counts).
-- **The entire faithful rewrite is not finished.** Next: full bootstrap initialization
-  and original-filter end-to-end replay, secondary/DB policy parity, true IMU-only
-  tracker, remaining USB startup/keep-alive/reconnect behavior, movement/occlusion
-  fixtures, and live SteamVR pose comparison. Detailed gaps: `ai/driver/runtime.md`.
+- This table is the port's history (what came from where). The driver has since been
+  released as openhouse 1.0; current work and open issues are in `ai/README.md`, and
+  live comparisons against the stock driver run in `openhouse-compare`.
 - Regression command: `cmake --build build -j16 && ctest --test-dir build --output-on-failure`.
   Oracle fixtures require the original binary, captures, and cached controller config;
   missing captures/config can skip their tests. No new hardware capture is needed

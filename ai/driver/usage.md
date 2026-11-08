@@ -41,13 +41,13 @@ can change the Watchman protocol mode. Replay does not access hardware.
 # Generic capture: record until Ctrl-C, with config/DB snapshots and diagnostics
 ./build/lhcapture
 # Or choose a session directory and optional duration
-./build/lhcapture captures/controller-session-01 --seconds 120
+./build/lhcapture ~/lh-captures/controller-session-01 --seconds 120
 
 # Inspect captured input (the older single-file capture command also still works)
-./build/lhtool stats captures/controller-session-01/input.lhraw
+./build/lhtool stats ~/lh-captures/controller-session-01/input.lhraw
 
 # Track a capture; JSON Lines on stdout, diagnostics on stderr
-./build/lhtool track captures/controller_static_10s.lhraw > poses.jsonl
+./build/lhtool track tests/data/captures/controller_static_10s.lhraw > poses.jsonl
 ./build/lhtool track session.lhraw --db /path/to/lighthousedb.json > poses.jsonl
 
 # Live tracking, 30 seconds (0 = until Ctrl-C)
@@ -56,8 +56,8 @@ can change the Watchman protocol mode. Replay does not access hardware.
 # Interactive 3D diagnostics (if GLFW/OpenGL were found)
 # liblh session runtime (shared room map, roles from device JSON, Index input):
 ./build/lhviz                                          # live devices (SteamVR stopped)
-./build/lhviz --replay captures/<session>/input.lhraw  # replay a recording
-./build/lhtool session captures/<session>/input.lhraw --rate 30 > session.jsonl
+./build/lhviz --replay ~/lh-captures/<session>/input.lhraw  # replay a recording
+./build/lhtool session ~/lh-captures/<session>/input.lhraw --rate 30 > session.jsonl
 
 # Drop-in driver_lighthouse.so for SteamVR / Monado steamvr_lh (tracked devices only):
 scripts/build-linux.sh && dist/openhouse-driver/install.sh   # uninstall.sh restores stock
@@ -114,11 +114,9 @@ find_package(lighthouse CONFIG REQUIRED)
 target_link_libraries(my_app PRIVATE lh::tracking) # optionally lh::usb
 ```
 
-## Verification and remaining work
+## More
 
 See [PROGRESS](PROGRESS.md), [architecture](ARCHITECTURE.md),
-[filter](lighthouse_direct.md), [solver](pose_solver.md), and
-[runtime limitations](runtime.md). In particular, full bootstrap initialization,
-secondary-base/DB policies, IMU-only tracker parity, restart policies, and complete
-pose comparison still need work. The LH2 transport formats are decoded for protocol
-coverage; **LH2 tracking is deliberately out of scope**.
+[filter](lighthouse_direct.md), [solver](pose_solver.md) and [runtime](runtime.md).
+LH2 tracking works: [lh2_support](lh2_support.md). For a complete, minimal program
+using `lh::Session`, see `apps/example_app` (its own CMake project).

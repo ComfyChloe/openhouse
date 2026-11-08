@@ -4,7 +4,7 @@ The "how does the whole thing work" document. The deeper references are:
 - `ARCHITECTURE.md`: the reverse-engineered stock driver.
 - `lighthouse_direct.md`, `state_vector.md`, `measurement_models.md`: the filter.
 - `disambiguator_tdm.md`: the stock 2-base sync decoder.
-- `lh_runtime.md`, `runtime.md`: the session runtime.
+- `lh_runtime.md` (`lh::Session`), `runtime.md` (the lower-level `lh::Tracker`): the runtime.
 - `openvr_driver.md`: what the host sees.
 - `tracking_improvements.md`: every non-stock change and its numbers.
 - `windows_build.md`: the Windows build.
@@ -197,7 +197,9 @@ Diagnostics are DEBUG messages, not stderr prints.
 |---|---|
 | `lhtool session <capture.lhraw> --room R.json [--trace T.jsonl]` | Replay a capture through the whole runtime: events, poses, a 100 Hz trace |
 | `tools/eval_replay.sh <capture> OUT 50 8` | Score a change: valid %, coasting, spikes, jitter, per device |
-| `openhouse-viewer` | Live status of the running driver: devices, bases, room, 3D view, log by level |
+| `openhouse-viewer` | Live status of the running driver: devices, bases, room, 3D view, log by level; Report > Save bug report |
+| `openhouse-compare` | openhouse and SteamVR's own driver (loaded in-process, Monado-style host) tracking the same device side by side, with per-side stats |
+| `apps/example_app` | Minimal standalone CMake project using `lh::Session` (user-facing integration example) |
 | `lhviz` | Developer 3D view running its own tracking (SteamVR closed) |
 | `lhcapture [dir]`, `lhcapture --check` | Record raw data; check the sync-flash layout live |
 
@@ -209,7 +211,8 @@ Diagnostics are DEBUG messages, not stderr prints.
 | ms4-01 | 4 bases switched on and off |
 | testswing | Violent swings |
 | session-* | sessions recorded with a Quest headset under WiVRn |
-| `captures/controller-moving-hidden` | The repo test capture |
+| fastmotionindex, fastmotion3-5 | Fast swings (the Beat Saber stand-in) |
+| `tests/data/captures/*` | Short test captures in the repo (used by ctest) |
 
 ## 9. Build, install, test
 
@@ -222,6 +225,4 @@ scripts/build-windows.sh            # MinGW cross build -> dist/openhouse-window
 scripts/build-firmware.sh           # lhbs + installers -> dist/openhouse-basestation-firmware.zip
 ```
 
-On Windows: extract the zip, then
-`powershell -ExecutionPolicy Bypass -File .\Install-Driver.ps1 Install`
-(see `windows_build.md`).
+Windows installer and build details: `windows_build.md`.
