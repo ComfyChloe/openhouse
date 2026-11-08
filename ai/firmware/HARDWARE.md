@@ -198,8 +198,8 @@ VBUS is present**, and PIO0_1 is the mode button. So:
 1. Remove power and USB. **Hold the mode button**, connect micro-USB (and power).
 2. A drive labelled **`CRP DISABLD`** appears with a single `firmware.bin` (the whole flash).
 3. **Back it up first** (`cp …/firmware.bin backup.bin`). This is a full flash dump of your unit.
-4. Write the new image in place: `tools/flash.sh build/firmware.bin`
-   (uses `dd conv=notrunc,nocreat`; do not delete or `cp` over the file).
+4. Write the new image in place with the firmware package's `install-firmware.sh`,
+   which uses `dd conv=notrunc,nocreat`; do not delete or `cp` over the file.
 5. Power-cycle without the button.
 
 Because ISP entry is in mask ROM and keyed on the button, **a bad custom image cannot brick the
@@ -244,7 +244,7 @@ valid. Running firmware can also jump into ISP: stock `isp` console command; cus
 | 2026-10-18 | Mode button on PIO0_1 (active low) confirmed; LED0 colours G/B/Y/P match the colour-bit map; `iap_reinvoke_isp` sequence (3 s hold) re-enters USB ISP |
 | 2026-10-18 | EEPROM dumped via lhfw 0.2 (copied to flash sector 31, read through the ISP drive). 3 parameter partitions, CRC32 OK. `fcal.*` matches SteamVR lighthousedb.json for serial 2701244469 = 0xA101B835 = `sys.name` |
 
-## 9. EEPROM / parameter format (decoded, `tools/params_decode.py`)
+## 9. EEPROM / parameter format (decoded)
 
 * Partitions at EEPROM 0x000, 0x300, 0x600: `{"CPRM", u32 version, u32 crc32}` + 551-byte payload.
   0x000/0x300 = current/previous user saves (versions alternate), 0x600 = factory (version 3).

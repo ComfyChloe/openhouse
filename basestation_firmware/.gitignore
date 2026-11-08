@@ -5,7 +5,6 @@ __pycache__/
 *.elf
 *.map
 *.o
-test/host_params
 
 # Local only: bring-up firmware, patches, RE tools
 fw/

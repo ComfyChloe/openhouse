@@ -71,7 +71,7 @@ uint32_t debug_snapshot(uint32_t load_rc, int load_part, uint32_t events)
     if ((rc = iap_flash_write_sector_chunked(30, buf, fill_params, &ctx))) return 0x100 | rc;
     if ((rc = iap_flash_write_sector_chunked(31, buf, fill_eeprom, &ctx))) return 0x200 | rc;
     /* the checksum/status words live in chunk 0, already written: they stay
-     * 0xFFFFFFFF here; eeprom_extract.py recomputes the sum itself */
+     * 0xFFFFFFFF here; a reader of the dump recomputes the sum itself */
     return ctx.rc;
 }
 

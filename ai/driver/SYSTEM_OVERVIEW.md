@@ -18,7 +18,7 @@ tracking of headsets, Index controllers and trackers. It's built as:
 - **`driver_lighthouse.so` / `.dll`**, an OpenVR driver on top of `liblh`. It's a
   drop-in for SteamVR and for Monado's `steamvr_lh` (WiVRn, xrizer, VRChat).
 - **Tools:** `openhouse-viewer` (live status of the running driver), `lhtool`, `lhviz`,
-  `lhcapture`, `lhhaptics`, `lhidentify`.
+  `lhcapture`, `openhouse-check`.
 
 Headsets are tracked by openhouse; their display comes from SteamVR's stock driver,
 loaded at runtime for the headset only (`stock_hmd.cpp`). Base stations are exposed as
@@ -200,7 +200,6 @@ Diagnostics are DEBUG messages, not stderr prints.
 | `openhouse-viewer` | Live status of the running driver: devices, bases, room, 3D view, log by level |
 | `lhviz` | Developer 3D view running its own tracking (SteamVR closed) |
 | `lhcapture [dir]`, `lhcapture --check` | Record raw data; check the sync-flash layout live |
-| `lhhaptics`, `lhidentify` | Haptics test; identify a device |
 
 **Evaluation captures** (in `~/lh-captures`):
 
@@ -217,9 +216,10 @@ Diagnostics are DEBUG messages, not stderr prints.
 ```sh
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build -j16
 ctest --test-dir build -j8          # unit, oracle (bit-exact vs stock), runtime, openvr
-scripts/steamvr-driver.sh install   # stops nothing: close SteamVR / Monado / WiVRn first
+scripts/build-linux.sh              # release build -> dist/openhouse-driver-linux.tar.gz
+dist/openhouse-driver/install.sh    # stops nothing: close SteamVR / Monado / WiVRn first
 scripts/build-windows.sh            # MinGW cross build -> dist/openhouse-windows-x64.zip
-python3 scripts/package-firmware.py # lhbs + installers -> dist/openhouse-basestation-firmware.zip
+scripts/build-firmware.sh           # lhbs + installers -> dist/openhouse-basestation-firmware.zip
 ```
 
 On Windows: extract the zip, then

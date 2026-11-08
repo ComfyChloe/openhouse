@@ -237,9 +237,9 @@ confirms 3`, and no "[no round from the master yet]". A healthy laser shows abou
 cd lhbs && make                 # build/firmware.bin, checksummed
 make hosttest                   # 4 simulated stations: the round, collisions, stress seeds
 # ISP: power off, hold the mode button, power on -> "CRP DISABLD" drive
-../tools/flash.sh build/firmware.bin    # writes in place; never drag-and-drop
+../scripts/build-firmware.sh && ../dist/openhouse-basestation-firmware/install-firmware.sh   # backs up, writes in place; never drag-and-drop
 ```
 
-`flash.sh` backs up the old flash first (`backups/flash-<date>.bin`). lhbs flash images
-also carry an EEPROM snapshot (`LHEEDUMP`), which `tools/eeprom_extract.py` and
-`params_decode.py` read. That's how a wiped unit's calibration can be recovered.
+The installer backs up the old flash first. lhbs flash images also carry an EEPROM
+snapshot (`LHEEDUMP`) with the unit's calibration, so a wiped unit's calibration can be
+recovered from a backup.

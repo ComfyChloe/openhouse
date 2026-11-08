@@ -26,10 +26,9 @@ to restore automatic device-config roles. Other settings in this file are preser
 
 ```
 cmake --build build -j16
-cmake --build build --target driver_package -j16  # optional portable dependency bundle
-scripts/steamvr-driver.sh install     # backs up the stock driver once, installs ours (stripped)
-scripts/steamvr-driver.sh uninstall   # restores the stock driver
-scripts/steamvr-driver.sh status
+scripts/build-linux.sh                # release build + package (dist/openhouse-driver/)
+dist/openhouse-driver/install.sh      # backs up the stock driver once, installs ours
+dist/openhouse-driver/uninstall.sh    # restores the stock driver
 ```
 
 Stop SteamVR / monado-service before installing. Monado's `steamvr_lh` loads the same

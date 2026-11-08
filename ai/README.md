@@ -50,10 +50,10 @@ Goals and constraints (from the owner):
 | `src/openvr` | the OpenVR driver (devices, inputs, skeleton, host frame, room publisher, stock HMD, pairing, telemetry server) |
 | `src/common` | small shared pieces (loopback sockets) |
 | `src/platform` | OS helpers (paths, precise sleep) |
-| `apps/` | `openhouse-viewer` (live status of the running driver), `lhtool` (replay/session/track), `lhcapture` (recorder), `lhviz` (developer viewer), `lhhaptics`, `lhidentify` |
+| `apps/` | `openhouse-viewer` (live status of the running driver), `lhtool` (replay/session/track), `lhcapture` (recorder), `lhviz` (developer viewer), `openhouse-check` (update check) |
 | `tests/` | unit, runtime, OpenVR component/mock-host, oracle tests (load the original binary) |
 | `tools/` | `eval_replay.sh/.py` (tracking scorer), RE helpers |
-| `scripts/` | Linux install (`steamvr-driver.sh`), packaging (`package-driver.py`, `package-windows.py`, `package-firmware.py`), Windows cross-build |
+| `scripts/` | Release builds (`build-linux.sh`, `build-windows.sh`, `build-firmware.sh`) and the packagers they call (`package-linux.sh`, `package-driver.py`, `package-windows.py`, `package-firmware.py`), the Windows installer script |
 | `basestation_firmware` | the firmware (`src/`, `test/`, `Makefile`); `tools/` flashing and console; `installer/` the end-user installers (Linux sh, Windows ps1/bat). `fw/`, `patches/`, `re/`, `bsfirmwares/`, `backups/` are local only |
 | `re/ghidra_scripts` | headless Ghidra scripts. The rest of `re/` (project, decompiles) is local only |
 
@@ -65,7 +65,7 @@ dumps, `libsurvive/` (reference only: LH2 polynomials and decode), recordings.
 ```sh
 cmake -S . -B build-linux -G Ninja && cmake --build build-linux -j$(nproc)
 ctest --test-dir build-linux -j4 --output-on-failure      # 10 tests; oracle tests skip without fixtures
-scripts/steamvr-driver.sh install build-linux/openvr/lighthouse/bin/linux64/driver_lighthouse.so
+scripts/build-linux.sh && dist/openhouse-driver/install.sh   # close SteamVR / Monado / WiVRn first
 ```
 
 Windows: MSVC builds are preferred (native SteamVR). The project builds with the VS 2026

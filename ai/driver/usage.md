@@ -60,9 +60,7 @@ can change the Watchman protocol mode. Replay does not access hardware.
 ./build/lhtool session captures/<session>/input.lhraw --rate 30 > session.jsonl
 
 # Drop-in driver_lighthouse.so for SteamVR / Monado steamvr_lh (tracked devices only):
-scripts/steamvr-driver.sh install      # bundles dependencies too; "uninstall" restores stock
-# Manual deployment: cmake --build build --target driver_package -j16
-# Copy the entire build/driver-package/, not just its .so (see ai/driver/openvr_driver.md).
+scripts/build-linux.sh && dist/openhouse-driver/install.sh   # uninstall.sh restores stock
 
 # Windows x64 DLL + standalone apps (Linux cross-build; MinGW + vcpkg):
 scripts/build-windows.sh              # produces dist/lh-windows-x64.zip

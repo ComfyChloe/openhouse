@@ -104,7 +104,7 @@ loop:
 confirmed against the SyncOnBeam disambiguator (see interfaces.md).
 
 ## Observed on this machine (2026-10-16, SteamVR NOT running)
-`tools/hidhist.py 5 /dev/hidraw*`:
+A histogram of HID report IDs per hidraw node over 5 s:
 
 | Node | Device | Reports |
 |---|---|---|

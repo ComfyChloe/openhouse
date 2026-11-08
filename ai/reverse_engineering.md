@@ -12,7 +12,7 @@ All artifacts needed to keep working on driver_lighthouse.so without redoing ana
 | `fn_strings.tsv`, `fn_calls.tsv` | Per-function referenced string literals / callees. |
 | `plt.tsv` | PLT stub address → libc/libstdc++ symbol. |
 
-Addresses are Ghidra addresses = ELF VA + 0x100000. `tools/rd.py` reads constants by Ghidra address.
+Addresses are Ghidra addresses = ELF VA + 0x100000.
 
 Re-run a range decompile:
 ```

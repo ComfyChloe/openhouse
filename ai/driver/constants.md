@@ -1,6 +1,6 @@
 # Constants recovered from .rodata
 
-Read with `tools/rd.py d <addr>`. "Used by" lists functions where the meaning was established.
+"Used by" lists functions where the meaning was established.
 
 | Addr | Value | Meaning | Used by |
 |---|---|---|---|

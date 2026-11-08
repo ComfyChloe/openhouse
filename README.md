@@ -160,7 +160,7 @@ ctest --test-dir build
 ```
 Needs Eigen, Ceres, nlohmann-json and GTest (and glfw for the viewers). The tests use short recordings from `tests/data/captures`.
 
-For the release packages, `scripts/build-linux.sh` builds and packages the Linux one, and `scripts/build-windows.sh` cross builds and packages the Windows one with MinGW. Both build their own Ceres through vcpkg, since the distro Ceres usually comes with SuiteSparse, which has GPL parts that can't be shipped with openhouse.
+For the release packages, `scripts/build-linux.sh` builds and packages the Linux one, `scripts/build-windows.sh` cross builds and packages the Windows one with MinGW, and `scripts/build-firmware.sh` builds, tests and packages the lhbs firmware (needs `arm-none-eabi-gcc`). Both build their own Ceres through vcpkg, since the distro Ceres usually comes with SuiteSparse, which has GPL parts that can't be shipped with openhouse.
 
 ## Explanation of the Tracking
 Each basestation sweeps it's lasers across the room, and devices have sensors on them that see the lasers. When a laser hits a sensor, the timing gives the angle of that sensor from the basestation. With enough sensors, you get the device's pose. The IMU (the gyroscrope and the accelerometer) fills in between the sweeps. 1.0 basestations take turns and send a flash before each sweep, 2.0 basestations all sweep at once on their own channels. Basestations also send a slow data stream (OOTX) with their calibration, their accelerometer and their mode.
