@@ -40,6 +40,9 @@ licenses.mkdir(exist_ok=True)
 for copyright in (prefix / 'share').glob('*/copyright'):
     shutil.copy2(copyright, licenses / (copyright.parent.name + '.txt'))
 shutil.copy2(repo / 'third_party/imgui/LICENSE.txt', licenses / 'imgui.txt')
+shutil.copy2(repo / 'LICENSE', out / 'LICENSE.txt')
+if Path('/usr/share/licenses/openvr').is_dir():
+    shutil.copytree('/usr/share/licenses/openvr', licenses / 'openvr', dirs_exist_ok=True)
 for package in ['mingw-w64-crt', 'mingw-w64-headers', 'mingw-w64-winpthreads', 'gcc']:
     notice = Path('/usr/share/licenses') / package
     if notice.is_dir():

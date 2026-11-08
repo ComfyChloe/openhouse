@@ -63,6 +63,7 @@ class TelemetryClient {
   bool Connected() const { return socket_ != net::kInvalid && helloed_; }
   int Port() const { return port_; }
   const std::string& Host() const { return host_; }
+  const std::string& Version() const { return version_; }  // the driver's; empty before 1.0
   int Pid() const { return pid_; }
   const State& Current() const { return state_; }
   bool HaveState() const { return haveState_; }
@@ -79,7 +80,7 @@ class TelemetryClient {
   int port_;
   net::Socket socket_ = net::kInvalid;
   double nextAttempt_ = 0;
-  std::string buffer_, host_;
+  std::string buffer_, host_, version_;
   int pid_ = 0;
   bool helloed_ = false, haveState_ = false;
   State state_;

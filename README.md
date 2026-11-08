@@ -16,7 +16,7 @@ This project is heavily AI assisted. I've personally audited the codes it genera
 | Fast Motion | Swinging a device too fast can ruin the runtime IMU calibration or reach to the limits of the IMU, causing the device to completely lose tracking. | The filter dynamically disables parts that are slow to improve tracking on very fast movements, which reduces the amount of tracking loss immensely |
 | Jitter and Stutters | Tracking corrections cause jitter and sudden movements on the devices | Output is predicted and smoothed, late wireless light is used instead of dropped, and still devices are held perfectly still |
 | Lighthouse 1.0 Support | Up to 2 basestations | Up to 4 basestations with the lhbs firmware (included) |
-| Lighthouse 2.0 Support | Up to 4 basestations used actively | Every basestation used actively, up to 16 |
+| Lighthouse 2.0 Support | Up to 4 basestations used actively | Still 4 actively being used, but the switch that happens when one basestation is not visible is immediate, unlike SteamVR |
 
 Everything else that you'd expect still works. Headsets (tested on HTC Vive and Bigscreen Beyond, other headsets probably also work), controllers (Vive and Index), trackers (Vive, Tundra, modded vive controllers that appears as trackers etc.) along with SteamVR's pairing menu, power features such as powering the device off when SteamVR closes and so on.
 
@@ -25,7 +25,9 @@ Grab the latest release for your platform. **Close SteamVR (and Monado/WiVRn) be
 
 The installer replaces SteamVR's `driver_lighthouse` and keeps the original one next to it as `driver_lighthouse.so.stock` / `driver_lighthouse.dll.stock`. openhouse needs that file to show the headset's display. The driver doesn't contain anything from the stock driver. It only loads the driver when a lighthouse headset is connected.
 
-SteamVR updates could overwrite the driver. The installer also adds a small update check to SteamVR that starts with it, and if a SteamVR update replaced openhouse, it shows a dialog telling you to run the installer again. On Linux, the installer also asks if you want the same check for Monado/WiVRn. If you say yes, it installs a small background service that checks every time Monado or WiVRn starts. The uninstaller removes all of it.
+SteamVR updates could overwrite the driver. The installer also adds a small update check to SteamVR that starts with it, and if a SteamVR update replaced openhouse, it shows a dialog telling you to run the installer again. SteamVR only starts it once your headset is up, so if you start SteamVR without a headset you won't get the dialog. I'd advise you to run the installer every time SteamVR updates just in case. On Linux, the installer also asks if you want the same check for Monado/WiVRn. If you say yes, it installs a systemd user service that checks every time Monado or WiVRn starts. The uninstaller removes all of it.
+
+To see which version you have, open `openhouse-viewer` or look for `openhouse` in SteamVR's `vrserver.txt`.
 
 ### Windows
 Extract the zip somewhere and double click `Install-Driver.bat`. To go back to SteamVR's driver, double click `Uninstall-Driver.bat`.
@@ -87,7 +89,7 @@ View > Advanced shows more details like the position of devices, how much light 
 
 ### Settings
 Settings are in `~/.config/lh/` on Linux and `%APPDATA%\lh\` on Windows.
-- `roommap.json` is the learned room. Delete it if you want to learn the room from scratch.
+- `roommap.json` is the learned room. Delete it if you want to learn the room from scratch. You can delete it while openhouse is running too, it notices and starts learning the room again right away (same as **Reset room** in SteamVR's settings).
 - `hostframe.json` is where your play area is anchored. Delete it if you want to re-anchor.
 - `settings.json` is optional. You can use it to disable/enable devices, set manual device roles etc.
 ```json
@@ -102,8 +104,10 @@ Settings are in `~/.config/lh/` on Linux and `%APPDATA%\lh\` on Windows.
 
 ### SteamVR settings
 In SteamVR's settings there is an **openhouse** page (Settings > openhouse, you might need to turn on "Advanced Settings"):
-- **Predict fast swings with acceleration** helps SteamVR predict where your controllers will be during fast motion, like in Beat Saber. On by default.
+- **Acceleration prediction** helps SteamVR predict where your controllers will be during fast motion, like in Beat Saber. On by default.
 - **Position smoothing** and **Rotation smoothing** are how long a tracking correction takes to show up, 60 ms by default. Lower means less delay, but small corrections can show up as tiny jumps. 0 turns it off.
+- **Record tracking data** records your devices' raw data while it's on, for bug reports. The recordings go to `~/.local/share/openhouse/recordings` on Linux and `%LOCALAPPDATA%\openhouse\recordings` on Windows.
+- **Reset room** throws away the learned room and learns it again from scratch. Use it if you moved your basestations around and the room doesn't fix itself. It turns itself back off.
 
 Changes apply while you play, within a second.
 
@@ -131,7 +135,9 @@ You don't need any of these normally. On Linux, put them in SteamVR's launch opt
 | `LH_EVALUATE_ROOM=1` | Freezes the room (development) |
 
 ### Reporting a bug
-Set `LH_CAPTURE=/some/folder` (or add `"capture": "C:\\lh-capture\\run1"` under `"driver_lighthouse"` in `steamvr.vrsettings`), play until the problem happens and keep playing for a minute after it. Then close SteamVR and send me the folder, with SteamVR's `vrserver.txt` if you can.
+The easiest way is to turn on **Record tracking data** in SteamVR's settings, play until the problem happens and keep using it for a minute after it. Then turn it off and send me the recording, with SteamVR's `vrserver.txt` if you can. Tell me which version you're on as well.
+
+If you want to record the whole session from the start, set `LH_CAPTURE=/some/folder` (or add `"capture": "C:\\lh-capture\\run1"` under `"driver_lighthouse"` in `steamvr.vrsettings`).
 
 You can also record with `lhcapture` while playing. While it's recording, you can type a note and press enter to mark the time, like `left foot jumping`.
 
@@ -148,7 +154,9 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build
 ```
-Needs Eigen, Ceres, nlohmann-json and GTest (and glfw for the viewers). The tests use short recordings from `tests/data/captures`. For Windows, `scripts/build-windows.sh` cross builds and packages it with MinGW.
+Needs Eigen, Ceres, nlohmann-json and GTest (and glfw for the viewers). The tests use short recordings from `tests/data/captures`.
+
+For the release packages, `scripts/build-linux.sh` builds and packages the Linux one, and `scripts/build-windows.sh` cross builds and packages the Windows one with MinGW. Both build their own Ceres through vcpkg, since the distro Ceres usually comes with SuiteSparse, which has GPL parts that can't be shipped with openhouse.
 
 ## Explanation of the Tracking
 Each basestation sweeps it's lasers across the room, and devices have sensors on them that see the lasers. When a laser hits a sensor, the timing gives the angle of that sensor from the basestation. With enough sensors, you get the device's pose. The IMU (the gyroscrope and the accelerometer) fills in between the sweeps. 1.0 basestations take turns and send a flash before each sweep, 2.0 basestations all sweep at once on their own channels. Basestations also send a slow data stream (OOTX) with their calibration, their accelerometer and their mode.
@@ -168,7 +176,7 @@ Each device has a Kalman filter that tracks its position, rotation, speed, IMU c
 
 The room is every basestation's position, and it's shared by every device. When a device sees 2 or more basestations at the same time, it saves a "keyframe". About once a second, every basestation gets placed together from all the keyframes of all the devices. The room then slowly gets built. After a successful room learning (which generally takes around 30 or so seconds), the room map is saved, so next sessions starts with that learned room map
 
-Once a basestation has enough keyframes, it gets locked, and devices can't move it anymore. Only a basestation that has been moved around (which is detected by the accelerometer of the basestation) gets relearned. If the main basestation was turned, the old room is out of date, so a new room gets learned instead. The room is ready (settled) once every basestation you can see is placed within 5 mm.
+Once a basestation has enough keyframes, it gets locked, and devices can't move it anymore. Only a basestation that has been moved around (which is detected by the accelerometer of the basestation) gets relearned. If the main basestation was turned, the old room is out of date, so a new room gets learned instead. A basestation counts as learned once it's placed within 5 mm, or within 20 mm after it got locked or has enough keyframes. The room is ready (settled) once every basestation you can see is learned. In SteamVR, basestations blink like they're searching until they get locked.
 
 openhouse tracks the headset itself, but the display part (lens distortion, display modes) comes from SteamVR's own driver, which gets loaded only for the headset's display.
 

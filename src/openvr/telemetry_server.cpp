@@ -4,6 +4,7 @@
 #include <nlohmann/json.hpp>
 
 #include "lh/telemetry.hpp"
+#include "lh/version.hpp"
 
 #ifdef _WIN32
 #include <process.h>
@@ -161,7 +162,7 @@ void TelemetryServer::Main() {
     {
       std::unique_lock lock(mutex_);
       for (net::Socket s; (s = net::Accept(listener_)) != net::kInvalid;) {
-        Client c{s, json{{"type", "hello"}, {"protocol", telemetry::kProtocolVersion}, {"name", "openhouse"}, {"host", host_},
+        Client c{s, json{{"type", "hello"}, {"protocol", telemetry::kProtocolVersion}, {"name", "openhouse"}, {"version", lh::kVersion}, {"host", host_},
                          {"pid", int(LH_GETPID())}}.dump() + "\n"};
         for (const auto& line : backlog_) c.out += line;
         clients_.push_back(std::move(c));

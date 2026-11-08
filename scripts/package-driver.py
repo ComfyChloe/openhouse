@@ -11,6 +11,10 @@ import shutil
 import subprocess
 import sys
 
+# GPL libraries (SuiteSparse's SPQR/CHOLMOD, via a distro Ceres) must never ship with the
+# MIT driver: build with scripts/build-linux.sh (vcpkg Ceres without SuiteSparse).
+FORBIDDEN = ('libspqr', 'libcholmod')
+
 PLATFORM = {'libc.so.6', 'libm.so.6', 'libdl.so.2', 'libpthread.so.0',
             'librt.so.1', 'libstdc++.so.6', 'libgcc_s.so.1', 'libresolv.so.2'}
 
@@ -33,6 +37,8 @@ def package(source, destination):
         name, path = words[0], words[2]
         if name in PLATFORM:
             continue
+        if name.startswith(FORBIDDEN):
+            raise RuntimeError(f'{name} is GPL and must not be bundled; build with scripts/build-linux.sh')
         target = deps / name
         shutil.copy2(path, target)
         manifest.append({'soname': name, 'source': path,

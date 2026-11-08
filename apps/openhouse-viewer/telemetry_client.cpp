@@ -49,6 +49,7 @@ void TelemetryClient::Handle(const std::string& line) {
   if (type == "hello") {
     helloed_ = true;
     host_ = j.value("host", "");
+    version_ = j.value("version", "");
     pid_ = j.value("pid", 0);
   } else if (type == "log") {
     LogLine l;

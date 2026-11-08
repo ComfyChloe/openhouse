@@ -53,6 +53,7 @@ constexpr const char* kStockFile = "driver_lighthouse.so.stock";
 #include "telemetry_server.hpp"
 #include "lh/log_level.hpp"
 #include "lh/telemetry.hpp"
+#include "lh/version.hpp"
 #include "host_frame.hpp"
 #include "haptic_routing.hpp"
 #include <set>
@@ -803,7 +804,7 @@ class Provider : public IServerTrackedDeviceProvider {
       return VRInitError_Init_HmdNotFound;
     }
     ApplyTuning(true);
-    Log("liblh session started (" + std::string(options.replayPath.empty() ? "live USB" : "replay " + options.replayPath) +
+    Log("openhouse " + std::string(lh::kVersion) + ": liblh session started (" + std::string(options.replayPath.empty() ? "live USB" : "replay " + options.replayPath) +
         "); head-mounted displays: tracked by us, displayed through the stock driver when one is present");
     Log(std::string("input components through ") +
         (ComponentInput() != VRDriverInput() ? "IVRDriverInput_005" : IVRDriverInput_Version));

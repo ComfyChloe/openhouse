@@ -13,6 +13,17 @@ cp "$repo/packaging/install-linux.sh" "$out/install.sh"
 cp "$repo/packaging/uninstall-linux.sh" "$out/uninstall.sh"
 cp "$repo/packaging/steamvr-dir.sh" "$out/.steamvr-dir.sh"
 cp "$repo/packaging/settingsschema.vrsettings" "$out/"
+# Notices: openhouse's own, the vcpkg libraries built in, and what the tools link or embed.
+cp "$repo/LICENSE" "$out/LICENSE.txt"
+prefix=$(sed -n 's/^VCPKG_INSTALLED_DIR:[A-Z]*=//p' "$build/CMakeCache.txt")/$(sed -n 's/^VCPKG_TARGET_TRIPLET:[A-Z]*=//p' "$build/CMakeCache.txt")
+for copyright in "$prefix"/share/*/copyright; do
+  [[ -f "$copyright" ]] && cp "$copyright" "$out/lh-licenses/$(basename "$(dirname "$copyright")").txt"
+done
+cp "$repo/third_party/hidapi/LICENSE-bsd.txt" "$out/lh-licenses/hidapi.txt"
+cp "$repo/third_party/imgui/LICENSE.txt" "$out/lh-licenses/imgui.txt"
+for package in openvr glfw systemd; do
+  [[ -d /usr/share/licenses/$package ]] && cp -r "/usr/share/licenses/$package" "$out/lh-licenses/"
+done
 for tool in lhtool lhcapture openhouse-viewer openhouse-check; do
   cp "$build/$tool" "$out/tools/"
   strip "$out/tools/$tool"

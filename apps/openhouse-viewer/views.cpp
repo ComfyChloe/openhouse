@@ -64,8 +64,8 @@ void DrawConnection(const TelemetryClient& client) {
   if (client.Connected()) {
     ImGui::TextColored(kGood, "Connected");
     ImGui::SameLine();
-    ImGui::TextDisabled("to the openhouse driver in %s (pid %d)", client.Host().empty() ? "?" : client.Host().c_str(),
-                        client.Pid());
+    ImGui::TextDisabled("to openhouse %s in %s (pid %d)", client.Version().empty() ? "(older than 1.0)" : client.Version().c_str(),
+                        client.Host().empty() ? "?" : client.Host().c_str(), client.Pid());
   } else {
     ImGui::TextColored(kBad, "Not connected");
     ImGui::SameLine();
