@@ -263,7 +263,13 @@ bool RoomMap::ImportSteamDatabase(const std::string& text, std::string* error) {
 // A base (or the origin) power cycled since the room was stored: its pose is kept, with
 // the weight of a few seconds of keyframes and at least 1 cm of uncertainty.
 bool RoomMap::Locked(const RoomBase& b) {
-  return !b.origin && !b.relearn && std::max(b.observations, b.storedObservations) >= 100;
+  // Placed well, not only often: a base locked while still uncertain was never refined
+  // again, so it never counted as learned (BaseStationState: 20 mm once locked) and the
+  // room never settled (2026-11-08: D7B1AD76 locked at 50 mm, alignment tools waited
+  // forever). Until it's within that, the solver keeps refining it.
+  constexpr double kLockVariance = 0.02 * 0.02;  // BaseStationState::kLearnedLockedSigma squared
+  return !b.origin && !b.relearn && std::max(b.observations, b.storedObservations) >= 100 &&
+         b.positionVariance <= kLockVariance;
 }
 
 void RoomMap::Suspect(RoomBase& b) {
