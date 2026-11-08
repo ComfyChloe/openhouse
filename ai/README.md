@@ -145,8 +145,10 @@ Open:
 * Multi-station over the sync cable (shelved): timing and superframe by pulse width,
   the mask by width bits; first check P1_0 (a cable slave's input latches high with it
   set, and every multi station raises it). `ai/firmware/MULTISTATION.md`.
-* SteamVR base station power control over Bluetooth: the stock driver opens its own
-  "Bluetooth services" connection (`re/decomp_all/001d54a0.c`); not traced.
+* SteamVR base station power control over Bluetooth: with a stock-driven headset, ours
+  answers vrmonitor's radio mode requests (`driver/openvr_driver.md`, checked on a
+  Bigscreen Beyond). Not traced: the stock driver's own "Bluetooth services" connection
+  (`re/decomp_all/001d54a0.c`).
 * Idle power-off reported not working; every step now logs, no log yet.
 * Jitter reports on LH2 + Index (#14 and another): replays show no resets and motion
   like LH1 controllers at every speed; waiting for a video or an `openhouse-compare` run.
