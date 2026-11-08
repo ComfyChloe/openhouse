@@ -17,7 +17,7 @@ out = repo / 'dist/openhouse-windows-x64'
 shutil.rmtree(out, ignore_errors=True)
 (out / 'apps').mkdir(parents=True)
 files = {build / 'openvr/lighthouse/bin/win64/driver_lighthouse.dll': out / 'driver_lighthouse.dll'}
-files.update({build / name: out / 'apps' / name for name in ['liblh.dll', 'openhouse-viewer.exe', 'lhviz.exe', 'lhtool.exe', 'lhcapture.exe', 'openhouse-check.exe']})
+files.update({build / name: out / 'apps' / name for name in ['liblh.dll', 'openhouse-viewer.exe', 'openhouse-compare.exe', 'lhviz.exe', 'lhtool.exe', 'lhcapture.exe', 'openhouse-check.exe']})
 system = {'advapi32.dll', 'kernel32.dll', 'shlwapi.dll', 'user32.dll', 'gdi32.dll',
           'shell32.dll', 'winmm.dll', 'ole32.dll', 'comdlg32.dll', 'msvcrt.dll',
           'ucrtbase.dll', 'ntdll.dll', 'imm32.dll', 'version.dll', 'oleaut32.dll', 'setupapi.dll', 'opengl32.dll', 'hid.dll', 'ws2_32.dll'}

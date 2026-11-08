@@ -24,7 +24,7 @@ cp "$repo/third_party/imgui/LICENSE.txt" "$out/lh-licenses/imgui.txt"
 for package in openvr glfw systemd; do
   [[ -d /usr/share/licenses/$package ]] && cp -r "/usr/share/licenses/$package" "$out/lh-licenses/"
 done
-for tool in lhtool lhcapture openhouse-viewer openhouse-check; do
+for tool in lhtool lhcapture openhouse-viewer openhouse-check openhouse-compare; do
   cp "$build/$tool" "$out/tools/"
   strip "$out/tools/$tool"
 done

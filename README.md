@@ -20,6 +20,8 @@ This project is heavily AI assisted. I've personally audited the codes it genera
 
 Everything else that you'd expect still works. Headsets (tested on HTC Vive and Bigscreen Beyond, other headsets probably also work), controllers (Vive and Index), trackers (Vive, Tundra, modded vive controllers that appears as trackers etc.) along with SteamVR's pairing menu, power features such as powering the device off when SteamVR closes and so on.
 
+**For integration to custom programs via the C++ API (for robotics or custom MOCAP systems), check out [the example project](apps/example_app)** to see how you can use openhouse as a library!
+
 ## Installation
 Grab the latest release for your platform. **Close SteamVR (and Monado/WiVRn) before installing!**
 
@@ -86,6 +88,9 @@ Install it into SteamVR's folder like above, and start Monado with its `steamvr_
 - The logs. DEBUG logs are hidden by default, you can turn them on with the checkbox. You can also hide the spammy ones, or right click a message and hide the messages like it.
 
 View > Advanced shows more details like the position of devices, how much light each device gets from each basestation, basestation faults etc.
+
+### openhouse-compare
+`openhouse-compare` (next to `openhouse-viewer`) runs openhouse and SteamVR's own lighthouse driver at the same time on the same devices, so you can see the difference yourself. Close SteamVR first, it runs both drivers by itself. Pick a device on the left, openhouse is shown in blue and SteamVR in red, with how much each one tracked, coasted and lost it.
 
 ### Settings
 Settings are in `~/.config/lh/` on Linux and `%APPDATA%\lh\` on Windows.

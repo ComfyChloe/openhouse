@@ -32,3 +32,5 @@ lhr-*/
 
 # Test fixtures: short recordings the tests replay (tests/data/captures/README.md)
 !tests/data/captures/**
+
+lighthousedb.json
