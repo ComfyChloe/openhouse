@@ -26,6 +26,8 @@ bool PairingMailbox::Open(vr::IVRDriverContext* context, LogFn log) {
   vr::EVRInitError error = vr::VRInitError_None;
   mailbox_ = context ? static_cast<IVRMailbox*>(context->GetGenericInterface(kMailboxVersion, &error)) : nullptr;
   if (!mailbox_ || error != vr::VRInitError_None) {
+    if (log_) log_("pairing: the host has no " + std::string(kMailboxVersion) + " (error " + std::to_string(int(error)) +
+                   "); SteamVR's pairing menu can't reach us");
     mailbox_ = nullptr;
     return false;
   }
@@ -84,8 +86,12 @@ void PairingMailbox::Poll(Session& session, const std::string& expected) {
     const std::string address = message.value("returnAddress", "");
     const std::string id = message.contains("message_id") ? message.at("message_id").dump() : "";
     const std::string* idp = id.empty() ? nullptr : &id;
+    if (log_) log_("pairing: " + (type.empty() ? std::string("message without a type") : type) + " from " +
+                   (address.empty() ? std::string("(no return address)") : address));
     if (type == "discover_dongles") {
-      Reply(address, Discover(session, expected, idp));
+      const std::string reply = Discover(session, expected, idp);
+      if (log_) log_("pairing: dongles " + reply);
+      Reply(address, reply);
     } else if (type == "start_pairing") {
       const std::string serial = message.value("serial", "");
       const double timeout = message.contains("timeoutSeconds") && message.at("timeoutSeconds").is_number()
