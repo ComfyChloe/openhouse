@@ -1,5 +1,5 @@
 # openhouse
-openhouse is an improved, drop in replacement over the SteamVR's lighthouse driver (can also be used standalone without any VR runtime) that improves upon the tracking of SteamVR's driver with numerous changes. It also supports using more than 4 2.0 basestations actively, unlike SteamVR where more than 4 wouldn't be used actively but only when needed, and **supports using more than 2 1.0 basestations with a custom firmware**
+openhouse is an improved, drop in replacement over the SteamVR's lighthouse driver (can also be used standalone without any VR runtime) that improves upon the tracking of SteamVR's driver with numerous changes. It also **supports using more than 2 1.0 basestations with a custom firmware**
 
 It works on SteamVR (Windows and Linux) and on Monado/WiVRn through Monado's `steamvr_lh` driver.
 **For integration to custom programs via the C++ API (for robotics or custom MOCAP systems), check out [the example project](apps/example_app)** to see how you can use openhouse as a library!
