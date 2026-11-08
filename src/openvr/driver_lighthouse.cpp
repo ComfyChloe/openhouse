@@ -54,6 +54,7 @@ constexpr const char* kStockFile = "driver_lighthouse.so.stock";
 #include "lh/log_level.hpp"
 #include "lh/telemetry.hpp"
 #include "lh/version.hpp"
+#include "lh/bug_report.hpp"
 #include "host_frame.hpp"
 #include "haptic_routing.hpp"
 #include <set>
@@ -881,6 +882,7 @@ class Provider : public IServerTrackedDeviceProvider {
     }
     stop_ = true;
     if (thread_.joinable()) thread_.join();
+    if (reportThread_.joinable()) reportThread_.join();  // a report being saved finishes first
     g_telemetry.Stop();
     if (session_) session_->Stop();
     session_.reset();
@@ -1131,6 +1133,51 @@ class Provider : public IServerTrackedDeviceProvider {
   double lastSnapshot_ = -1e300;
   double lastTelemetry_ = -1e300;
   std::string recording_;  // the settings page's recording, while on
+  std::thread reportThread_;  // saving a bug report
+  std::atomic<bool> reportDone_{true};
+
+  // The bug report zip (lh/bug_report.hpp) with this recording, off the host thread.
+  void SaveReport(const std::string& recording) {
+    if (reportThread_.joinable() && reportDone_) reportThread_.join();
+    if (reportThread_.joinable()) {
+      Log("a bug report is still being saved; this recording stays in " + recording);
+      return;
+    }
+    reportDone_ = false;
+    lh::BugReportOptions options;
+    options.summary = ReportSummary();
+    options.recording = recording;
+    reportThread_ = std::thread([this, options] {
+      // The USB thread closes the capture on its next pass: let it finish the file.
+      std::this_thread::sleep_for(std::chrono::milliseconds(500));
+      std::string error;
+      const std::string path = lh::SaveBugReport(options, &error);
+      Log(path.empty() ? "bug report failed: " + error : "bug report saved: " + path);
+      reportDone_ = true;
+    });
+  }
+
+  // The devices, bases and room as they are now, for a bug report's info.txt.
+  std::string ReportSummary() const {
+    std::string out = "room " + (snapshot_.roomId.empty() ? std::string("(none)") : snapshot_.roomId) +
+                      (roomPublisher_.Settled() ? ", settled" : ", not settled") + "\n\ndevices:\n";
+    char line[256];
+    for (const auto& d : snapshot_.devices) {
+      std::snprintf(line, sizeof line, "  %s %s %s: %s, %s%s\n", d.info.serial.c_str(), lh::ToString(d.info.role),
+                    d.info.model.c_str(), d.info.connected ? "connected" : "disconnected",
+                    d.pose.valid ? "tracking" : "not tracking", d.info.enabled ? "" : ", disabled");
+      out += line;
+    }
+    out += "\nbase stations:\n";
+    for (const auto& b : snapshot_.bases) {
+      std::snprintf(line, sizeof line, "  %s channel %s %s: %s%s%s, %.1f mm, %d keyframes\n", b.serial.c_str(),
+                    b.channel.empty() ? "?" : b.channel.c_str(), b.lh2 ? "2.0" : "1.0", b.seen ? "seen" : "not seen",
+                    !b.known ? ", not placed" : b.learned ? ", learned" : ", learning", b.locked ? ", locked" : "",
+                    b.sigma * 1000, b.observations);
+      out += line;
+    }
+    return out;
+  }
   double lastTuning_ = -1e300;
 
   // SteamVR settings, section driver_openhouse (the page from settingsschema.vrsettings,
@@ -1157,7 +1204,8 @@ class Provider : public IServerTrackedDeviceProvider {
     const double rotation = number("rotationSmoothingMs", 60) / 1000.0;
     const bool acceleration = flag("predictWithAcceleration", true);
     session_->SetOutputTuning(position, rotation, acceleration);
-    // Record: raw device data to <data>/recordings while on (replay with `lhtool session`).
+    // Record session: raw device data to <data>/recordings while on (replay with
+    // `lhtool session`); turning it off saves the bug report zip with it.
     const bool record = flag("record", false);
     if (record != !recording_.empty()) {
       if (record) {
@@ -1176,7 +1224,8 @@ class Provider : public IServerTrackedDeviceProvider {
         }
       } else {
         session_->SetCapture("");
-        Log("recording saved: " + recording_);
+        Log("recording stopped: " + recording_ + "; saving the bug report");
+        SaveReport(recording_);
         recording_.clear();
       }
     }

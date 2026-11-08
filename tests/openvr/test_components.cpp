@@ -241,7 +241,7 @@ TEST(RawAlignment, TakesTheLevelFromOurRoomNotAStaleDatabase) {
 
 // A small disagreement with lighthousedb.json's level (Valve's accelerometers, ours:
 // 2 deg) keeps SteamVR's frame exactly: the anchor where SteamVR has it, so tools
-// aligning that frame (alignment tools resets past 3 deg) see no move. Our room turning
+// aligning that frame (some reset past a few degrees) see no move. Our room turning
 // inside (re-levelling) changes nothing in the host frame either.
 TEST(RawAlignment, KeepsSteamVRsFrameForSmallLevelDifferencesAndNeverDrifts) {
   const auto path = (std::filesystem::temp_directory_path() / ("lh-test-rawalign2-" + std::to_string(::getpid()) + ".json")).string();

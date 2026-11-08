@@ -40,8 +40,8 @@ bool RawAlignment::Update(const SessionSnapshot& snapshot) {
     // The host frame is SteamVR's (lighthousedb.json): its yaw, origin and level, with
     // the anchor exactly where SteamVR has it, whatever our room does inside (our own
     // re-levelling cancels out here). Tools that align SteamVR's lighthouse frame to
-    // something else (alignment tools, motoc, Space Calibrator) count on the anchor
-    // staying put: alignment tools starts over when it turns 3 deg. Only a level that's
+    // something else (motoc, Space Calibrator and the like) count on the anchor
+    // staying put: some start over when it turns a few degrees. Only a level that's
     // grossly off (> 5 deg: a base moved since SteamVR last saw it) is corrected, once
     // per session, about the anchor, and then held: never a frame that drifts.
     if (!levelDecided_) {

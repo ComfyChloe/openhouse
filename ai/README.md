@@ -10,7 +10,7 @@ short). Don't add other Markdown outside `ai/`.
   reimplementation of Valve's Lighthouse 1.0 and 2.0 tracking (`driver_lighthouse`). It ships as a
   drop-in OpenVR driver (`driver_lighthouse.so` / `.dll`) for SteamVR and for Monado's
   `steamvr_lh`, plus tools (capture, replay, viewer). The owner runs it under Monado +
-  WiVRn with a Quest headset (alignment tools aligns the Quest with the Lighthouse room),
+  WiVRn with a Quest headset (a separate tool aligns the Quest with the Lighthouse room),
   in VRChat and Beat Saber, on Linux and Windows SteamVR.
 * **lhbs** (`basestation_firmware/`): a readable reimplementation of the HTC Lighthouse 1.0
   base station firmware (NXP LPC11U37), with an optical multi-station mode for more than
@@ -105,8 +105,8 @@ Four LH1 bases on lhbs multi-station: slots 1-4 = E236DC40 (master), A101B835, D
 "calibration-rescue-244" firmware and restored from a flash backup: **never suggest that
 firmware**. Devices: Index controllers (LHR-13DA81D1 right, LHR-8F9BE6F2 left), trackers,
 a Vive headset (LHR-0704E07A). Quest Pro through WiVRn for VRChat.
-An alignment tool reads the room from `/openhouse-room-<uid>`
-(`include/lh/room_shm.h`; its copy `src/linux/openhouse_room.h` must stay identical).
+Alignment tools can read the room from `/openhouse-room-<uid>` (`include/lh/room_shm.h`;
+copies of that header in other projects must stay identical).
 
 ## State of the work (2026-10-25)
 

@@ -9,13 +9,17 @@
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_opengl2.h>
 
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <nlohmann/json.hpp>
 #include <string>
+#include <thread>
 
+#include "lh/bug_report.hpp"
 #include "lh/telemetry.hpp"
 #include "log_view.hpp"
 #include "telemetry_client.hpp"
@@ -62,6 +66,59 @@ struct Settings {
   }
 };
 
+// Report > Save bug report: the zip is written on its own thread (a long recording takes
+// a few seconds); the menu bar says how it went.
+class BugReport {
+ public:
+  ~BugReport() { if (thread_.joinable()) thread_.join(); }
+  bool Busy() const { return busy_; }
+  std::string Status() { std::lock_guard lock(mutex_); return status_; }
+  void Save(const TelemetryClient& client) {
+    if (busy_) return;
+    if (thread_.joinable()) thread_.join();
+    lh::BugReportOptions options;
+    options.summary = Summary(client);
+    for (const auto& l : client.Logs()) {
+      char time[32];
+      std::snprintf(time, sizeof time, "%10.3f ", l.time);
+      options.log += time + std::string(lh::LogLevelName(l.level)) + " " + (l.serial.empty() ? "" : l.serial + " ") + l.text + "\n";
+    }
+    busy_ = true;
+    { std::lock_guard lock(mutex_); status_ = "Saving the bug report..."; }
+    thread_ = std::thread([this, options] {
+      std::string error;
+      const std::string path = lh::SaveBugReport(options, &error);
+      std::lock_guard lock(mutex_);
+      status_ = path.empty() ? "Bug report failed: " + error : "Bug report saved: " + path;
+      busy_ = false;
+    });
+  }
+
+ private:
+  static std::string Summary(const TelemetryClient& client) {
+    if (!client.Connected()) return "viewer: not connected to the driver\n";
+    const State& s = client.Current();
+    std::string out = "driver " + (client.Version().empty() ? std::string("(older than 1.0)") : client.Version()) + " in " +
+                      client.Host() + "\nroom " + s.room.id + (s.room.settled ? ", settled" : ", not settled") + "\n\ndevices:\n";
+    for (const auto& d : s.devices)
+      out += "  " + d.serial + " " + d.role + " " + d.model + ": " + (d.connected ? d.state : "disconnected") + "\n";
+    out += "\nbase stations:\n";
+    char line[160];
+    for (const auto& b : s.bases) {
+      std::snprintf(line, sizeof line, "  %s channel %s: %s%s, %.1f mm, %d keyframes\n", b.serial.c_str(),
+                    b.channel.empty() ? "?" : b.channel.c_str(), b.seen ? "seen" : "not seen",
+                    !b.placed ? ", not placed" : b.learned ? ", learned" : ", learning", b.sigma * 1000, b.observations);
+      out += line;
+    }
+    return out;
+  }
+
+  std::thread thread_;
+  std::atomic<bool> busy_{false};
+  std::mutex mutex_;
+  std::string status_;
+};
+
 void Section(const char* title) {
   ImGui::Spacing();
   ImGui::SeparatorText(title);
@@ -93,6 +150,7 @@ int main() {
   settings.Load(logs.Filter());
   if (lh::MinimumLogLevelFromEnvironment() == lh::LogLevel::Debug) logs.Filter().debug = true;  // LH_LOG_LEVEL=DEBUG
   float logShare = 0.38f;  // of the window height
+  BugReport report;
 
   while (!glfwWindowShouldClose(window)) {
     glfwPollEvents();
@@ -120,6 +178,12 @@ int main() {
         if (ImGui::MenuItem("Show all hidden kinds again", nullptr, false, !logs.Filter().hidden.empty())) logs.Filter().hidden.clear();
         ImGui::EndMenu();
       }
+      if (ImGui::BeginMenu("Report")) {
+        if (ImGui::MenuItem("Save bug report", nullptr, false, !report.Busy())) report.Save(client);
+        ImGui::TextDisabled("Saved to %s", lh::BugReportDirectory().c_str());
+        ImGui::EndMenu();
+      }
+      if (const std::string status = report.Status(); !status.empty()) ImGui::TextDisabled("%s", status.c_str());
       ImGui::EndMenuBar();
     }
 

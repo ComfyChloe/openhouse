@@ -160,15 +160,15 @@ switches were removed for the release). Details and numbers are in `tracking_imp
     heading** it had when first anchored (`hostframe.json` beside the room map). The
     frame is always level: its tilt is the room's own.
     - Pinning the full pose instead kept an old level forever: a remounted origin left
-      the frame 53° off level and broke alignment tools.
+      the frame 53° off level and broke alignment tools reading it.
     - A knocked origin that the room re-placed moves the anchor with it.
   - `LH_HOST_FRAME=steamvr`: align to SteamVR's universe through a shared base
     (`RawAlignment`), as the original did.
 - **RoomPublisher:** shared memory `/openhouse-room-<uid>` (Linux; layout in
   `include/lh/room_shm.h`). It carries every base's pose in the host frame, with
   σ and an origin flag, a *settled* flag (no base moving, all σ < 5 mm) and an *epoch*
-  that changes when the settled room differs. alignment tools prefers it over the runtime's
-  base station devices.
+  that changes when the settled room differs. Alignment tools can use it instead of the
+  runtime's base station devices.
 - **Hand skeleton:** ported from the stock hand logic. Monado reads only the
   "without controller" range. The thumb rises at once when nothing is touched and
   glides between buttons; the skeleton is sent periodically, not only with input
@@ -209,7 +209,7 @@ Diagnostics are DEBUG messages, not stderr prints.
 | vrchat-01 | Normal play, 2 bases, 5 devices: the main regression set |
 | ms4-01 | 4 bases switched on and off |
 | testswing | Violent swings |
-| session-* | sessions recorded with the alignment tool |
+| session-* | sessions recorded with a Quest headset under WiVRn |
 | `captures/controller-moving-hidden` | The repo test capture |
 
 ## 9. Build, install, test

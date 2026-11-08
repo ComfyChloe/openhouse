@@ -1,5 +1,5 @@
 // The driver's room, published for tools that align the lighthouse frame to something
-// else (alignment tools): POSIX shared memory /openhouse-room-<uid> (Linux).
+// else: POSIX shared memory /openhouse-room-<uid> (Linux).
 //
 // Poses are in the host's raw tracking frame (what the base stations and devices are
 // reported in: WorldFromDriver * pose). "settled" says the room has stopped moving: no
@@ -8,7 +8,7 @@
 // was measured against the old poses is stale. A reader takes the room only while
 // "beat" is fresh (the driver writes it every 0.25 s) and the pid is alive.
 //
-// Plain C layout, shared with alignment tools (src/linux/openhouse_room.h is a copy).
+// Plain C layout, so other projects can keep a copy of this header.
 #pragma once
 #include <stdint.h>
 

@@ -32,7 +32,7 @@
             {
                 "name": "/settings/driver_openhouse/record",
                 "control": "toggle",
-                "label": "Record tracking data (saved in the openhouse folder)",
+                "label": "Record Session (disable to save)",
                 "show_without_hmd": true
             },
             {

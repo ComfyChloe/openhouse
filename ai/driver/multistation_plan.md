@@ -91,7 +91,7 @@ sample history, which assume ≤ 2 stations, a 417 µs slot and a sweep each rev
 | B6 | Mode byte is 0..3 (+bit 7 only for hw 0x0D) | `ootx.cpp` dynamic-state decode → mode 4 → forced to 0 with "incorrectly specifies SOB mode" | multi stations show "mode 0"; slot/N not available |
 | B7 | A base sweeps every revolution | `SampleHistory` keeps 2.95 periods, brackets within ±2 periods (`sample_history.cpp:11,45`) | slave sweeps 66 ms apart (N=4): no bracket → **bootstrap never starts** on it |
 | B8 | Clusters of one station's flashes are ≥ 417 µs from another's | phase clustering joins within 1/90 cycle (185 µs) | 250 µs spacing still separates, but with only ~65 µs margin for jitter |
-| B9 | ModeLabel A/B/C | `driver_lighthouse.cpp` base properties | an alignment tool's shim reads a digit ModeLabel as an LH2 channel (1–16): don't label slots "1".."4" |
+| B9 | ModeLabel A/B/C | `driver_lighthouse.cpp` base properties | external tools may read a digit ModeLabel as an LH2 channel (1–16): don't label slots "1".."4" |
 
 Everything downstream already handles 4 bases: `LighthouseDirect` has 4 slots (primary
 + 3 alternates, state size 49 = 31 + 3 × 6), the room map and room solver take any
@@ -188,8 +188,8 @@ Per tracked device's disambiguator (each device sees the same room):
 * Room map: SteamVR's lighthousedb knows at most the 2 stations stock ever saw; the
   others are located by the room solver as new bases are now. Nothing to change.
 * OpenVR (B9): ModeLabel `"M1".."M4"` (not digits); `Prop_ModeLabel` stays A/B/C for
-  stock stations. Base count limits: SteamVR fine; Monado drops bases (an alignment tool's
-  shim adopts up to 16 at ids 40+).
+  stock stations. Base count limits: SteamVR fine; Monado drops bases beyond its own
+  limit.
 * RawAlignment: the anchor must be a station in lighthousedb.json (a stock-era
   station), as today.
 

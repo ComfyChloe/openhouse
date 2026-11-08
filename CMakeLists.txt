@@ -55,6 +55,15 @@ target_include_directories(lh_common PUBLIC
 if(WIN32)
   target_link_libraries(lh_common PUBLIC ws2_32)
 endif()
+
+# ---- lh_report: the bug report zip (driver and openhouse-viewer) ----------------
+add_library(lh_report STATIC src/report/bug_report.cpp)
+set_target_properties(lh_report PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(lh_report PRIVATE src)
+target_link_libraries(lh_report PUBLIC lh_common PRIVATE ZLIB::ZLIB)
+if(WIN32)
+  target_link_libraries(lh_report PRIVATE shell32 ole32)
+endif()
 install(TARGETS lh_common EXPORT lighthouseTargets ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
 
 add_library(lh_tracking
@@ -196,7 +205,7 @@ if(LH_BUILD_OPENVR_DRIVER AND LH_BUILD_USB AND OPENVR_INCLUDE_DIR)
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/openvr/lighthouse/bin/${LH_OPENVR_PLATFORM}
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/openvr/lighthouse/bin/${LH_OPENVR_PLATFORM})
   target_include_directories(driver_lighthouse PRIVATE include src ${OPENVR_INCLUDE_DIR})
-  target_link_libraries(driver_lighthouse PRIVATE lh_tracking lh_usb Ceres::ceres Eigen3::Eigen nlohmann_json::nlohmann_json)
+  target_link_libraries(driver_lighthouse PRIVATE lh_report lh_tracking lh_usb Ceres::ceres Eigen3::Eigen nlohmann_json::nlohmann_json)
   find_package(Python3 COMPONENTS Interpreter QUIET)
   find_program(PATCHELF_EXECUTABLE patchelf)
   if(NOT WIN32 AND Python3_Interpreter_FOUND AND PATCHELF_EXECUTABLE)
@@ -236,7 +245,7 @@ if(LH_BUILD_VIEWER)
     add_executable(openhouse-viewer apps/openhouse-viewer/main.cpp apps/openhouse-viewer/telemetry_client.cpp
                    apps/openhouse-viewer/log_view.cpp apps/openhouse-viewer/views.cpp)
     target_include_directories(openhouse-viewer PRIVATE src)
-    target_link_libraries(openhouse-viewer PRIVATE lh_common lh_imgui nlohmann_json::nlohmann_json)
+    target_link_libraries(openhouse-viewer PRIVATE lh_common lh_report lh_imgui nlohmann_json::nlohmann_json)
     install(TARGETS openhouse-viewer RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
   else()
     message(STATUS "GLFW/OpenGL not found: skipping lhviz")

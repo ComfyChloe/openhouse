@@ -1,5 +1,5 @@
 // Publishes the driver's room (base poses in the host's raw frame, settled, epoch) for
-// alignment tools and similar tools; see include/lh/room_shm.h.
+// tools that align the lighthouse frame to something else; see include/lh/room_shm.h.
 #pragma once
 #include <Eigen/Geometry>
 #include <map>

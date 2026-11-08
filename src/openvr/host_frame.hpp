@@ -1,14 +1,14 @@
 // The host frame in our own room mode: fixed across sessions, whatever our room does.
 //
 // Our room re-levels itself from the devices' gravity every session (1-2.5 deg), and
-// its solver refines the bases. Reported as is, the host frame followed: alignment tools
+// its solver refines the bases. Reported as is, the host frame followed: an alignment tool
 // saw its anchor turn and reset its alignment ("anchor moved") every session. So, as
 // RawAlignment does against SteamVR's lighthousedb.json, the room's origin base is
 // pinned to the position and heading it had when this room was first anchored (saved in
 // hostframe.json beside the room map): a turn about the vertical and a shift, never a
 // tilt. The host frame is always the room's level (its gravity): pinning the whole pose
 // kept every later re-level out of it, and a 51 deg re-level of a remounted origin left
-// the frame 53 deg off level, past what alignment tools can fit (yaw + translation). A knocked
+// the frame 53 deg off level, past what an alignment tool can fit (yaw + translation). A knocked
 // origin that the room re-placed (SessionSnapshot::originEpoch) moves the anchor with it
 // instead: the room didn't move, so the host frame doesn't either.
 #pragma once

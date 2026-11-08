@@ -155,9 +155,9 @@ The room is published in shared memory (`/dev/shm/openhouse-room-<uid>`,
 `include/lh/room_shm.h`): every base's pose in the host frame, whether the room has
 settled (no base moved more than 5 mm / 0.15 deg for 3 s, every visible base under 5 mm
 uncertainty) and an epoch that changes when a settled room differs from the last by
-1 cm / 0.3 deg. alignment tools reads it when present: its camera sightings wait while
-the room settles and are dropped at a new epoch. Without it (the stock driver),
-alignment tools uses the runtime's base station devices as before.
+1 cm / 0.3 deg. A tool that aligns another tracking system to the lighthouse room can
+wait while the room settles and drop what it measured at a new epoch. Without it (the
+stock driver), such tools use the runtime's base station devices.
 
 On session-ms-01 the room settles about 27 s in, from the stored room as from none. Then
 the solver still moves the second base about 3 cm over 20 s (a second epoch at 45 s):

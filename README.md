@@ -106,7 +106,7 @@ Settings are in `~/.config/lh/` on Linux and `%APPDATA%\lh\` on Windows.
 In SteamVR's settings there is an **openhouse** page (Settings > openhouse, you might need to turn on "Advanced Settings"):
 - **Acceleration prediction** helps SteamVR predict where your controllers will be during fast motion, like in Beat Saber. On by default.
 - **Position smoothing** and **Rotation smoothing** are how long a tracking correction takes to show up, 60 ms by default. Lower means less delay, but small corrections can show up as tiny jumps. 0 turns it off.
-- **Record tracking data** records your devices' raw data while it's on, for bug reports. The recordings go to `~/.local/share/openhouse/recordings` on Linux and `%LOCALAPPDATA%\openhouse\recordings` on Windows.
+- **Record Session (disable to save)** records your devices' raw data while it's on. When you turn it off, it saves a bug report zip with that recording (see below). The recordings themselves stay in `~/.local/share/openhouse/recordings` on Linux and `%LOCALAPPDATA%\openhouse\recordings` on Windows.
 - **Reset room** throws away the learned room and learns it again from scratch. Use it if you moved your basestations around and the room doesn't fix itself. It turns itself back off.
 
 Changes apply while you play, within a second.
@@ -135,7 +135,11 @@ You don't need any of these normally. On Linux, put them in SteamVR's launch opt
 | `LH_EVALUATE_ROOM=1` | Freezes the room (development) |
 
 ### Reporting a bug
-The easiest way is to turn on **Record tracking data** in SteamVR's settings, play until the problem happens and keep using it for a minute after it. Then turn it off and send me the recording, with SteamVR's `vrserver.txt` if you can. Tell me which version you're on as well.
+1. Turn on **Record Session** in SteamVR's openhouse settings.
+2. Play until the problem happens and keep using it for a minute after it.
+3. Turn **Record Session** off.
+
+That saves a zip into `Documents/openhouse reports` which contains the lighthouse capture data, room map, steamvr settings and steamvr logs. Link the zip that is generated to me on either GitHub issues or through Discord/Twitter
 
 If you want to record the whole session from the start, set `LH_CAPTURE=/some/folder` (or add `"capture": "C:\\lh-capture\\run1"` under `"driver_lighthouse"` in `steamvr.vrsettings`).
 
