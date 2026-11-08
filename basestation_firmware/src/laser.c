@@ -176,6 +176,25 @@ bool laser_init(void)
     return isl_ok = ok;
 }
 
+/* A channel change saves every parameter, and the drive currents in it must be the ones
+ * the lasers booted with, not where power regulation has moved them: saved on each
+ * change, the regulated values ratcheted 89AE90F2's currents down to ~1 over a few boots
+ * (2026-11-08: laser fault, 3 mW of 30, since the window is boot +-60). An explicit
+ * console `save` still saves what is set. */
+void laser_boot_currents_for_save(bool saving)
+{
+    static uint8_t regulated[2];
+    if (saving) {
+        regulated[0] = P.laser_0_current;
+        regulated[1] = P.laser_1_current;
+        P.laser_0_current = boot_current[0];
+        P.laser_1_current = boot_current[1];
+    } else {
+        P.laser_0_current = regulated[0];
+        P.laser_1_current = regulated[1];
+    }
+}
+
 bool laser_driver_ok(void) { return isl_ok; }
 uint8_t laser_driver_id(void) { return isl_id; }
 

@@ -15,6 +15,9 @@ void    laser_match_event(int n);
 void    laser_safety_check(void);
 void    laser_watchdog(void);
 void    laser_poll(void);
+/* Around a settings save on a channel change: true puts the boot drive currents in the
+ * parameters, false puts the regulated ones back. */
+void    laser_boot_currents_for_save(bool saving);
 extern volatile bool apc_enabled, laser_fault;
 extern volatile uint16_t apc_adc[2];
 extern volatile float apc_detected[2], apc_power[2];

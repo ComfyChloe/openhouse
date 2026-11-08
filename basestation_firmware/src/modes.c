@@ -2,6 +2,7 @@
 #include "modes.h"
 #include "params.h"
 #include "multi.h"
+#include "laser.h"
 
 /* OOTX sync pulse-width sets (stock flash @0xE590, 48 MHz ticks), in parameter
  * order j0 j1 k0 k1 j2 j3 k2 k3 = index [skip<<2 | axis<<1 | data]. */
@@ -71,7 +72,9 @@ void mode_next(void)
         P.mode_current = (P.mode_current + 1) % mode_count();
         mode_apply(P.mode_current);
     }
+    laser_boot_currents_for_save(true);
     params_save(0);
+    laser_boot_currents_for_save(false);
 }
 
 bool mode_matches_live(void)

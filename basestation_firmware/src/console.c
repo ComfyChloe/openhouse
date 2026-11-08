@@ -359,7 +359,9 @@ static void cmd_multi(char *a1, char *a2)
     if (a1) {                                   /* any change: apply and persist */
         timebase_select_input();
         console_mode_changed();
+        laser_boot_currents_for_save(true);
         params_save(0);
+        laser_boot_currents_for_save(false);
     }
     con_printf("multi %s  enable %s  slot %u (label %c)  stagger %u ticks  policy %s\n",
                multi_active() ? "ACTIVE" : "off", MC->enable ? "on" : "off", MC->slot,
