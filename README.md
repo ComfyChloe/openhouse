@@ -69,7 +69,7 @@ Press the button on the back of the basestation to change its channel. With lhbs
   - You don't have to use every number. For 3 basestations, `1` `2` `3` is fine, and they'll share the sweeps between the 3 of them automatically.
 - Don't mix the normal and the multi-station channels in one room. Either all of them are on `A`/`b`/`c`, or all of them are on `1`-`4`.
 
-openhouse detects the multi-station mode by itself, nothing needs to be set in the driver. The stock SteamVR driver can't use the multi-station channels, so switch back to `A`/`b`/`c` if you go back to it.
+openhouse detects the multi-station mode by itself, nothing needs to be set in the driver. The stock SteamVR driver can't use the multi-station channels, so switch back to `A`/`b`/`c` if you go back to it. If tracking doesn't start properly, power cycle the basestations once by unplugging the power adapter and replugging it, which fixes stale mode issues sometimes
 
 ## Usage
 
