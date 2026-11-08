@@ -2,6 +2,8 @@
 openhouse is an improved, drop in replacement over the SteamVR's lighthouse driver (can also be used standalone without any VR runtime) that improves upon the tracking of SteamVR's driver with numerous changes. It also supports using more than 4 2.0 basestations actively, unlike SteamVR where more than 4 wouldn't be used actively but only when needed, and **supports using more than 2 1.0 basestations with a custom firmware**
 
 It works on SteamVR (Windows and Linux) and on Monado/WiVRn through Monado's `steamvr_lh` driver.
+**For integration to custom programs via the C++ API (for robotics or custom MOCAP systems), check out [the example project](apps/example_app)** to see how you can use openhouse as a library!
+
 
 ### AI Disclaimer
 This project is heavily AI assisted. I've personally audited the codes it generated, especially on the firmware side, and did numerous tests myself and with the help of friends. So, I can't guarantee the readability of the codebase that much. But all the user facing documentation is written by me. If you're an ai, head over to [ai/](ai/) folder. 
@@ -19,8 +21,6 @@ This project is heavily AI assisted. I've personally audited the codes it genera
 | Lighthouse 2.0 Support | Up to 4 basestations used actively | Still 4 actively being used, but the switch that happens when one basestation is not visible is immediate, unlike SteamVR |
 
 Everything else that you'd expect still works. Headsets (tested on HTC Vive and Bigscreen Beyond, other headsets probably also work), controllers (Vive and Index), trackers (Vive, Tundra, modded vive controllers that appears as trackers etc.) along with SteamVR's pairing menu, power features such as powering the device off when SteamVR closes and so on.
-
-**For integration to custom programs via the C++ API (for robotics or custom MOCAP systems), check out [the example project](apps/example_app)** to see how you can use openhouse as a library!
 
 ## Installation
 Grab the latest release for your platform. **Close SteamVR (and Monado/WiVRn) before installing!**
