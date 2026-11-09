@@ -270,6 +270,7 @@ class SessionImpl final : public Session, public InputSinkBase {
   bool LightMovedLockedBase(const RoomSolveOutput& out);
   std::map<uint32_t, int> lightStrikes_;  // LightMovedLockedBase: solves in a row that moved it
   std::map<uint32_t, double> lightCooldown_;  // and until when (now_) it doesn't again
+  std::set<std::string> excludedFromRoom_;     // devices the last solve left out
   void WatchRoomFile(bool now = false);
   uint64_t RoomResets() const override { std::lock_guard lock(mutex_); return roomResets_; }
   void ReplayMain();
@@ -965,6 +966,22 @@ void SessionImpl::ApplySolve(const RoomSolveOutput& out) {
 // span 10 s and it takes more solves (one short stretch from one spot can't tell a moved
 // base from a misplaced device). A moved origin shows as every other base moved alike.
 bool SessionImpl::LightMovedLockedBase(const RoomSolveOutput& out) {
+  {
+    std::set<std::string> now;
+    for (const auto& [device, ratio] : out.excludedDevices) now.insert(device);
+    if (now != excludedFromRoom_) {
+      for (const auto& [device, ratio] : out.excludedDevices)
+        if (!excludedFromRoom_.count(device)) {
+          char text[200];
+          std::snprintf(text, sizeof text, "%s: its light fits the room %.1fx worse than the other devices'; left out of the room solve until it agrees",
+                        device.c_str(), ratio);
+          Emit(SessionEventType::Log, device, text, LogLevel::Warn);
+        }
+      for (const auto& device : excludedFromRoom_)
+        if (!now.count(device)) Emit(SessionEventType::Log, device, device + ": agrees with the room again; back in the room solve", LogLevel::Info);
+      excludedFromRoom_ = now;
+    }
+  }
   // Floors: 15 mm, or 1 % of the base's distance (a base 5 m away wanders 3-5 cm between
   // solves: vrchat-01), and 0.75 deg. One relearn from the light per base a minute, so a
   // base it relocks too soon can't cycle.
@@ -989,7 +1006,11 @@ bool SessionImpl::LightMovedLockedBase(const RoomSolveOutput& out) {
     const int othersRejected = out.keyframesRejected - b.rejected;
     // As clear from one device as from several: three solves, a quarter rejected, under
     // a tenth of the others.
-    if (b.rejected >= 15 && b.rejected * 4 >= b.seen && othersSeen >= 10 && othersRejected * 10 <= othersSeen) {
+    // More than one device must say so when more than one sees the base: one device's
+    // wrong view must not relearn the room.
+    const int needDevices = std::min(2, std::max(1, b.checkedDevices));
+    if (b.rejected >= 15 && b.rejected * 4 >= b.seen && othersSeen >= 10 && othersRejected * 10 <= othersSeen &&
+        b.rejectingDevices >= std::min(needDevices, std::max(1, b.devices))) {
       moved[serial] = {0, 0, kStrikes, b.rejected, b.seen};
       continue;
     }
@@ -1002,7 +1023,8 @@ bool SessionImpl::LightMovedLockedBase(const RoomSolveOutput& out) {
     const double sigma = std::sqrt((rb->positionVariance + b.positionVariance) / 3);
     const double rsigma = std::sqrt((rb->rotationVariance + b.rotationVariance) / 3);
     const double floor = std::max(kFloor, kFloorPerMetre * rb->worldFromBase.translation().norm());
-    if (dp > std::max(floor, kSigmas * sigma) || dr > std::max(kRotFloor, kSigmas * rsigma))
+    if ((dp > std::max(floor, kSigmas * sigma) || dr > std::max(kRotFloor, kSigmas * rsigma)) &&
+        b.supportingDevices >= needDevices)
       moved[serial] = {dp * 1e3, dr * 180 / M_PI, b.devices >= 2 ? kStrikes : kStrikesOneDevice};
   }
   // Every other base off at once (3+ bases): the origin moved, not all of them.

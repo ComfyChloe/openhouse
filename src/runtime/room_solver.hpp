@@ -58,6 +58,10 @@ struct SolvedBase {
   // Keyframes that saw this base, and how many of them the fit rejected. A moved base's
   // new keyframes are all rejected (they don't fit its old pose), the others' aren't.
   int seen = 0, rejected = 0;
+  // Of the devices behind this base's keyframes, how many reject several of them, and how
+  // many fit the solved pose clearly better than the room's (`known`) one. A base that
+  // really moved shows in more than one device; one device's bad view doesn't.
+  int rejectingDevices = 0, checkedDevices = 0, supportingDevices = 0;
 };
 
 struct RoomSolveInput {
@@ -75,6 +79,9 @@ struct RoomSolveOutput {
   bool ok = false;
   std::map<uint32_t, SolvedBase> bases;
   int keyframesUsed = 0, keyframesRejected = 0, observations = 0;
+  // Devices left out of this solve: their keyframes fit far worse than every other
+  // device's (a device with a wrong model or calibration must not move the room).
+  std::vector<std::pair<std::string, double>> excludedDevices;  // (device, its median / the others')
   double rms = 0;
   double seconds = 0;
   std::string summary;
