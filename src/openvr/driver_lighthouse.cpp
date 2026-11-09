@@ -176,13 +176,17 @@ uint64_t UniverseId(const std::string& roomId) {
 
 HmdQuaternion_t Quat(const std::array<double, 4>& q) { return {q[0], q[1], q[2], q[3]}; }
 
-// The render model name in a device's own config. Index controllers' firmware names
-// "{knuckles}valve_controller_knu_1_0_right", a resource root SteamVR no longer has (it
-// is "indexcontroller" now): SteamVR found no model and logged "Could not find named
-// path knuckles" every frame.
+// The render model name in a device's own config.
+// 1) Index controllers' firmware names "{knuckles}valve_controller_knu_1_0_right", a resource
+// root SteamVR no longer has (it is "indexcontroller" now): SteamVR found no model and logged
+// "Could not find named path knuckles" every frame.
+// 2) Vive Tracker 1.0/2.0 ("VIVE Tracker Pro MV") firmware reports "vr_tracker_vive_1_0" without
+// resource root. Without "{htc}", SteamVR attempts to load it from resources/rendermodels/
+// instead of drivers/htc/resources/rendermodels/, failing with VRRenderModelError_InvalidModel (301).
 std::string RenderModel(const std::string& configured) {
   static const std::string kOld = "{knuckles}";
   if (configured.rfind(kOld, 0) == 0) return "{indexcontroller}" + configured.substr(kOld.size());
+  if (configured == "vr_tracker_vive_1_0") return "{htc}vr_tracker_vive_1_0";
   return configured;
 }
 
