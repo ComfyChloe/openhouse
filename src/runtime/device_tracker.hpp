@@ -146,6 +146,15 @@ class DeviceTracker {
   std::map<uint32_t, double> loosened_;  // alternate bases loosened for a relearn: since when
   uint32_t reacquireOn_ = 0;              // CheckHealth: the pose is wrong, start over on this base
   std::optional<std::pair<uint32_t, double>> avoidBase_;  // (base, until Now()): don't bootstrap on it
+  // Reacquire throttling (not stock). A reacquire throws the filter away and starts
+  // over, so one that begins on the base it just began on has gained nothing: the light
+  // it rejected is the light it bootstraps on again. Live report 2026-11-09 (5 x LH 2.0,
+  // 399 s): 1101 reacquires = 2.75/s, 129 of them onto the same base, one base pair
+  // cycling 345 times, 4 of 6 devices affected.
+  uint32_t lastReacquireOn_ = 0;           // base the last reacquire started over on
+  double lastReacquireAt_ = -1e300;        // Now() of that reacquire
+  double reacquireBlockedUntil_ = -1e300;  // Now() before which another is not even queued
+  int reacquireBurst_ = 0;                 // reacquires since the tracker last settled
   std::map<uint32_t, std::deque<std::pair<double, int>>> recentUsed_;  // (sync time, sensors) of used frames, 0.5 s
   std::optional<double> switchedAt_;
   double acquiredAt_ = 0;

@@ -17,6 +17,14 @@ constexpr double kOutOfRangeAge = 0.25;                         // 0x1a9bc8 (sta
 // controller recording: 1e-6 -> 0.34 mm std, 4e-4 -> 0.13 mm, 1e-3 -> 0.10 mm.
 constexpr double kAltPriorVariance = 4e-4;
 constexpr int kRejectStreak = 20;  // ~0.3 s of a base's well-lit frames all rejected
+// Reacquire throttling (not stock). A reacquire is a hard reset, so repeating it every
+// few hundred ms turns one bad stretch into a permanent ping-pong, and the reset cannot
+// fix what it rejected. Exponential from the base, capped, so a device still recovers -
+// just at a rate that cannot hide the underlying fault. See device_tracker.hpp.
+constexpr double kReacquireBackoffBase = 0.5;     // s: floor after a settled stretch
+constexpr double kReacquireBackoffMax = 8.0;      // s: cap
+constexpr double kReacquireSameBaseWindow = 2.0;  // s: never restart on the same base sooner
+constexpr double kReacquireSettle = 10.0;         // s: quiet that clears the burst count
 // Consecutive light pulses timestamped behind the filter that mean a new epoch
 // (~0.5 s of light from one base).
 constexpr int kBackwardPulseReset = 1000;
@@ -418,7 +426,9 @@ void DeviceTracker::SyncRoom() {
         // light: the device's pose is what's wrong (session-post: a left controller
         // bootstrapped on E236DC40 into a pose its A101B835 light never fit, rejected
         // for 40 s while it drifted, until it ran out of bounds).
-        if (!apply && roomSigma < 0.005 && ++disagreeing_[e.serial] >= 2) reacquireOn_ = e.serial;
+        // Held off by the reacquire backoff: do not even queue another (see its use site).
+        if (!apply && roomSigma < 0.005 && ++disagreeing_[e.serial] >= 2 && Now() >= reacquireBlockedUntil_)
+          reacquireOn_ = e.serial;
         streak0 = streak1 = 0;
       } else {
         // The room is the joint view of every device: a filter clearly off it (> 1 cm,
@@ -478,15 +488,26 @@ void DeviceTracker::CheckHealth() {
     reacquireOn_ = 0;
     disagreeing_.clear();
     if (!stock) {
-      char text[160];
-      std::snprintf(text, sizeof text, "base %08X's light keeps contradicting the pose from %08X: reacquiring on %08X",
-                    on, primary, on);
+      const double now = Now();
+      if (now - lastReacquireAt_ > kReacquireSettle) reacquireBurst_ = 0;
+      const int shift = std::min(reacquireBurst_, 5);
+      const double backoff = std::min(kReacquireBackoffMax, kReacquireBackoffBase * double(1u << shift));
+      const bool sameBase = on == lastReacquireOn_;
+      const double holdOff = sameBase ? std::max(backoff, kReacquireSameBaseWindow) : backoff;
+      char text[176];
+      std::snprintf(text, sizeof text,
+                    "base %08X's light keeps contradicting the pose from %08X: reacquiring on %08X (attempt %d)",
+                    on, primary, on, reacquireBurst_ + 1);
       Log(text);
       const auto& f = filter_->Filter();
       if (f.updateCount > 200 && f.CalibrationHealthy()) carry_ = f;
       ResetFilter();
-      avoidBase_ = std::make_pair(primary, Now() + 1.0);
-      switchedAt_ = Now();
+      avoidBase_ = std::make_pair(primary, now + 1.0);
+      switchedAt_ = now;
+      lastReacquireOn_ = on;
+      lastReacquireAt_ = now;
+      reacquireBlockedUntil_ = now + holdOff;
+      ++reacquireBurst_;
       return;
     }
   }
