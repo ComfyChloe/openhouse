@@ -79,6 +79,11 @@ class DirectFilter {
   // their predicted spread are left out of the update (reflections, one bad sensor),
   // unless more than half of a sweep's rows are: then the prediction is what's off.
   double gateSigma = 0;
+  // How far the gravity state may sit from 9.80665 before the filter's calibration is
+  // rejected: stock 5 %. The improvements allow 10 %: an Index controller whose
+  // accelerometer reads 5 % low converged on 9.30 every time and reset over and over
+  // (GitHub report); the gravity state absorbs that scale, so tracking is fine there.
+  double gravityTolerance = 0.49033249999999996;
   uint64_t gatedRows = 0;
   int lastOutliers = 0;          // last Update: optical rows beyond gateSigma, before gating
   double lastWorstSigma = 0;     // last Update: largest |innovation| / predicted sigma

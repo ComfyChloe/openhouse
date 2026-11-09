@@ -11,8 +11,11 @@
 //    tracking, our room frame); every other call passes through.
 //  * PollNextEvent: the host's events reach both drivers (ours polls the host and hands
 //    the stock driver a copy), so neither steals the other's.
-// The stock provider's standby calls are not forwarded: it would power off controllers
-// it doesn't own here. The headset's own device calls are.
+// Its IVRProperties is a proxy too: the stock driver's writes of the headset's universe
+// are dropped (ours sets it); every other property passes.
+// Of the stock provider's standby calls only LeaveStandby is forwarded (it turns the
+// headset's panels back on); EnterStandby would power off controllers it doesn't own
+// here. The headset's own device calls are forwarded.
 #pragma once
 
 #include <atomic>
@@ -41,6 +44,9 @@ class StockHmd {
   // Host thread: our RunFrame calls these.
   void PushEvent(const vr::VREvent_t& event);
   void RunFrame();
+  // The host's LeaveStandby on our provider: the stock driver turns the headset's panels
+  // back on in it.
+  void LeaveStandby();
 
   // A headset the stock driver added and the host activated: (serial, object id). alive
   // stays valid for the process's life and turns false when the host deactivates it.
@@ -70,6 +76,7 @@ class StockHmd {
   class Host;
   class LogFilter;
   class Settings;
+  class Properties;
   class Context;
   class DeviceProxy;
   friend class Host;
@@ -81,6 +88,7 @@ class StockHmd {
   vr::IVRServerDriverHost* realHost_ = nullptr;
   Host* host_ = nullptr;
   Settings* settings_ = nullptr;
+  Properties* properties_ = nullptr;
   LogFilter* logProxy_ = nullptr;
   Context* context_ = nullptr;
   LogFn log_;

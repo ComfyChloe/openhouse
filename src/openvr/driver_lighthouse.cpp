@@ -231,8 +231,12 @@ class Device : public ITrackedDeviceServerDriver {
     externalAlive_ = alive;
     active_ = true;
   }
+  // SteamVR's idle power-off (power/turnOffControllersTimeout) calls this; the stock
+  // driver powers the device off here when it can (Prop_DeviceCanPowerOff), and so do we.
   void EnterStandby() override {
-    if (info_.role == lh::DeviceRole::Controller || info_.role == lh::DeviceRole::Tracker) powerOffRequested_ = true;
+    const bool canPowerOff = info_.role == lh::DeviceRole::Controller || info_.role == lh::DeviceRole::Tracker;
+    Log("SteamVR put " + info_.serial + " in standby" + (canPowerOff ? ": powering it off" : " (not a device we power off)"));
+    if (canPowerOff) powerOffRequested_ = true;
   }
   void* GetComponent(const char*) override { return nullptr; }
   void DebugRequest(const char*, char* response, uint32_t size) override {
@@ -759,8 +763,11 @@ class Provider : public IServerTrackedDeviceProvider {
     std::string captureDir;
     // Or "capture" in steamvr.vrsettings under driver_lighthouse (or driver_openhouse): on
     // Windows a new environment variable reaches SteamVR only after Steam restarts.
+    // SteamVR only: older Monado's steamvr_lh (Envision's) aborts on a GetString of a
+    // key missing from default.vrsettings, and Monado/WiVRn see LH_CAPTURE anyway.
     std::string captureSetting;
-    for (const char* section : {"driver_lighthouse", "driver_openhouse"}) {
+    const bool steamvr = HostName().rfind("vrserver", 0) == 0;
+    if (steamvr) for (const char* section : {"driver_lighthouse", "driver_openhouse"}) {
       char value[1024]{};
       VRSettings()->GetString(section, "capture", value, sizeof value);
       if (*value) { captureSetting = value; break; }
@@ -931,9 +938,16 @@ class Provider : public IServerTrackedDeviceProvider {
     return {};
   }
 
+  // Only leaving standby reaches the stock driver: it powers the headset's panels back up
+  // there (the headset's own EnterStandby, through DeviceProxy, turned them off). Without
+  // it a headset that went to sleep stayed dark (#20). Its provider EnterStandby isn't
+  // forwarded: it would power off controllers it doesn't own here.
   bool ShouldBlockStandbyMode() override { return false; }
-  void EnterStandby() override {}
-  void LeaveStandby() override {}
+  void EnterStandby() override { Log("SteamVR entering standby"); }
+  void LeaveStandby() override {
+    Log("SteamVR leaving standby");
+    stock_.LeaveStandby();
+  }
 
  private:
   void Main() {

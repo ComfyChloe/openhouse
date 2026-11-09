@@ -34,9 +34,33 @@ if ($Action -eq 'Status') {
 # Steam holds SteamVR's driver DLL open even when SteamVR itself is not running: with
 # it up, replacing the file fails with "Cannot create a file when that file already
 # exists". Check the whole chain, and name what to close.
-$hosts = @(Get-Process -Name steam,vrserver,vrmonitor,vrcompositor,monado-service -ErrorAction SilentlyContinue)
+# The installer offers to close them, and waits until they're gone.
+$hostNames = 'steam', 'steamwebhelper', 'vrserver', 'vrmonitor', 'vrcompositor', 'vrdashboard', 'vrwebhelper',
+             'vrstartup', 'vrservice', 'monado-service'
+function Get-Hosts { @(Get-Process -Name $hostNames -ErrorAction SilentlyContinue) }
+$hosts = Get-Hosts
 if ($hosts) {
-    throw "Stop $($hosts.ProcessName -join ', ') before changing the driver (Steam loads SteamVR's driver DLL too)."
+    $names = ($hosts.ProcessName | Sort-Object -Unique) -join ', '
+    Write-Host ""
+    Write-Host "Steam / SteamVR is running ($names). It has the lighthouse driver open, so it" -ForegroundColor Yellow
+    Write-Host "must be closed before the driver can be changed." -ForegroundColor Yellow
+    $answer = Read-Host "Close them now? Unsaved work in games is lost. [y/N]"
+    if ($answer -notmatch '^[Yy]') { throw "Close Steam and SteamVR completely, then run this again." }
+    $hosts | Stop-Process -Force -ErrorAction SilentlyContinue
+    for ($i = 0; $i -lt 50 -and (Get-Hosts); $i++) { Start-Sleep -Milliseconds 200 }
+    $left = Get-Hosts
+    if ($left) { throw "Couldn't close $(($left.ProcessName | Sort-Object -Unique) -join ', '). Close them by hand (Task Manager), then run this again." }
+    Start-Sleep -Milliseconds 500  # file handles go a moment after the process
+    Write-Host "Closed."
+}
+# Overwrites, retrying for a few seconds: a file just released by a closed process can
+# still be locked briefly (Move-Item then failed with "file already exists").
+function Copy-Over([string]$from, [string]$to) {
+    for ($i = 0; ; $i++) {
+        try { [System.IO.File]::Copy($from, $to, $true); return }
+        catch { if ($i -ge 20) { throw "Could not write $to - a process still has it open. Close Steam and SteamVR completely, then run this again. ($($_.Exception.Message))" } }
+        Start-Sleep -Milliseconds 250
+    }
 }
 # The update check (openhouse-check.exe): an app SteamVR starts with every session that
 # warns when a SteamVR update replaced this driver. Registered in Steam's config:
@@ -92,7 +116,11 @@ function Install-Schema {
 }
 function Remove-Schema {
     if ((Test-Path $schema) -and (Select-String -Quiet -Path $schema -Pattern 'driver_openhouse')) { Remove-Item -LiteralPath $schema -Force }
-    if (Test-Path "$schema.stock") { Move-Item -LiteralPath "$schema.stock" -Destination $schema -Force }
+    if (Test-Path "$schema.stock") {
+        # Still there: a SteamVR update replaced ours with a newer one, so the backup is older.
+        if (Test-Path $schema) { Remove-Item -LiteralPath "$schema.stock" -Force }
+        else { Copy-Over "$schema.stock" $schema; Remove-Item -LiteralPath "$schema.stock" -Force }
+    }
 }
 
 if ($Action -eq 'Uninstall') {
@@ -101,33 +129,35 @@ if ($Action -eq 'Uninstall') {
     Set-CheckRegistration $false
     if (Test-Path $checkDir) { Remove-Item -LiteralPath $checkDir -Recurse -Force }
 }
+$installed = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($target))
+$isOurs = $installed.Contains('liblh session started')
 if ($Action -eq 'Install') {
     if (-not (Test-Path $DriverPath)) { throw "Package DLL missing: $DriverPath" }
     # The stock DLL is kept as driver_lighthouse.dll.stock: our driver loads it at run time
     # for headset displays. Back up whatever is installed unless it is ours (a SteamVR
     # update puts a newer stock DLL in place: that one replaces an older backup).
-    $installed = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($target))
-    $isOurs = $installed.Contains('liblh session started')
     if (-not $isOurs) {
-        Copy-Item -LiteralPath $target -Destination $backup -Force
+        Copy-Over $target $backup
         Write-Output "Saved SteamVR's driver as $backup"
     } elseif (-not (Test-Path $backup)) {
         throw "The installed driver is already openhouse's and there is no stock backup ($backup). Verify SteamVR's files in Steam, then install again."
     }
     $source = $DriverPath
 } else {
+    # A SteamVR update puts its own, newer driver in place of ours. The backup is then the
+    # older one: moving it back would undo the update, so it goes instead.
+    if (-not $isOurs) {
+        if (Test-Path $backup) { Remove-Item -LiteralPath $backup -Force }
+        Write-Output "SteamVR's own driver is already in place (a SteamVR update put it back). Your room and settings in %APPDATA%\lh are kept."
+        exit 0
+    }
     if (-not (Test-Path $backup)) { throw "SteamVR's driver backup isn't there ($backup). Nothing to undo, or verify SteamVR's files in Steam." }
-    Move-Item -LiteralPath $backup -Destination $target -Force
+    Copy-Over $backup $target
+    Remove-Item -LiteralPath $backup -Force
     Write-Output "SteamVR's own driver is back. Your room and settings in %APPDATA%\lh are kept."
     exit 0
 }
-Copy-Item -LiteralPath $source -Destination "$target.new" -Force
-try {
-    Move-Item -LiteralPath "$target.new" -Destination $target -Force
-} catch {
-    Remove-Item -LiteralPath "$target.new" -Force -ErrorAction SilentlyContinue
-    throw "Could not replace $target - a process still has it open. Close Steam and SteamVR completely, then run Install-Driver.bat again. ($($_.Exception.Message))"
-}
+Copy-Over $source $target
 if ((Get-FileHash $target).Hash -ne (Get-FileHash $source).Hash) { throw 'Installed file hash mismatch' }
 Install-Schema
 $checkExe = Join-Path $PSScriptRoot 'apps\openhouse-check.exe'

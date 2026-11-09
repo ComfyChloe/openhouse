@@ -8,7 +8,15 @@ check_registration unregister
 remove_monado_check
 rm -rf "$check_dir"
 remove_schema
+if ! grep -qa "liblh session started" "$target"; then
+  # A SteamVR update puts its own, newer driver in place of ours. The backup is then the
+  # older one: moving it back would undo the update, so it goes instead.
+  rm -f "$backup"
+  rm -rf "$dir/lh-libs"
+  echo "SteamVR's own driver is already in place (a SteamVR update put it back). Your room and settings in ~/.config/lh are kept."
+  exit 0
+fi
 [[ -f "$backup" ]] || { echo "SteamVR's driver backup isn't there ($backup). Nothing to undo, or verify SteamVR's files in Steam." >&2; exit 1; }
-mv "$backup" "$target"
+mv -f "$backup" "$target"
 rm -rf "$dir/lh-libs"
 echo "SteamVR's own driver is back. Your room and settings in ~/.config/lh are kept."

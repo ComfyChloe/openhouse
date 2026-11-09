@@ -37,7 +37,7 @@ DirectFilter::DirectFilter() : P(Mat::Zero(kStateSize, kStateSize)), Q(Mat::Zero
 
 bool DirectFilter::CalibrationHealthy() const {
   for (int i = 18; i < 31; ++i) if (!std::isfinite(x[i])) return false;
-  if (std::abs(x[18] - 9.80665) > 0.49033249999999996 ||
+  if (std::abs(x[18] - 9.80665) > gravityTolerance ||
       x[28] * x[28] + x[29] * x[29] + x[30] * x[30] > 0.06853891945200943) return false;
   for (int i = 25; i < 28; ++i) if (x[i] <= 0) return false;
   if (P.rows() < 31 || P.cols() < 31 || !P.block(18, 18, 13, 13).allFinite()) return false;
