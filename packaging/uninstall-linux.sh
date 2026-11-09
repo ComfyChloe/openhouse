@@ -6,7 +6,10 @@ here=$(cd "$(dirname "$0")" && pwd)
 # The update check goes first, so it's removed even when there's no driver backup.
 check_registration unregister
 remove_monado_check
-rm -rf "$check_dir"
+# Only the files the installer put there: the folder is also the driver's data directory,
+# with your recordings (Record Session) in it.
+rm -f "$check_dir/openhouse-check" "$check_dir/openhouse-check.vrmanifest" "$check_dir/openhouse-monado-watch"
+rmdir "$check_dir" 2>/dev/null || true  # only goes when nothing else is in it
 remove_schema
 if ! grep -qa "liblh session started" "$target"; then
   # A SteamVR update puts its own, newer driver in place of ours. The backup is then the
