@@ -9,7 +9,8 @@
 //     copies ours over it, the settings page schema, and the update check (an app SteamVR
 //     starts with every session: Steam's appconfig.json + vrappconfig);
 //   * uninstall: puts the backup back, unless a SteamVR update already put its own
-//     newer driver there (then the outdated backup goes instead).
+//     newer driver there (then the outdated backup goes instead), and removes the update
+//     check's files from %LOCALAPPDATA%\openhouse, not the folder: recordings live there.
 //
 //   openhouse-installer [--install | --uninstall | --status] [--steamvr PATH] [--yes]
 // Without an action it asks. Files are overwritten in place, retrying for a few seconds
@@ -272,8 +273,11 @@ void Uninstall(const Paths& p) {
   // First, so the check goes even when there's no driver backup.
   RemoveSchema(p);
   SetCheckRegistration(p, false);
+  // Only the files we put there: the folder is also the driver's data directory, with the
+  // user's recordings (Record Session) in it.
+  for (const char* name : {"openhouse-check.exe", "openhouse-check.vrmanifest"}) RemoveFile(p.checkDir / name);
   std::error_code ec;
-  fs::remove_all(p.checkDir, ec);
+  fs::remove(p.checkDir, ec);  // only goes when nothing else is in it
   if (ReadFile(p.target).find(kMarker) == std::string::npos) {
     // A SteamVR update puts its own, newer driver in place of ours. The backup is then the
     // older one: moving it back would undo the update, so it goes instead.
