@@ -444,6 +444,18 @@ RoomSolveOutput SolveRoom(const RoomSolveInput& in) {
     std::tie(ok, iterations) = solve(use, &rms);
     if (!ok) { out.summary = "solve failed after rejection"; return out; }
   }
+  std::map<uint32_t, std::pair<int, int>> seenRejected;
+  for (size_t i = 0; i < kfs.size(); ++i)
+    for (const auto& [base, s] : kfs[i].k->samples) {
+      ++seenRejected[base].first;
+      if (!use[i]) ++seenRejected[base].second;
+    }
+  // A base whose every keyframe was rejected is in no solve: reported at its room pose
+  // with no keyframes, so the caller still sees its rejections.
+  for (const auto& [base, sr] : seenRejected) {
+    const auto known = in.known.find(base);
+    if (sr.second > 0 && !out.bases.count(base) && known != in.known.end()) out.bases[base].worldFromBase = known->second;
+  }
   // Per-base fit statistics.
   std::map<uint32_t, std::pair<double, int>> fit;
   std::map<uint32_t, int> samples, fresh;
@@ -465,6 +477,8 @@ RoomSolveOutput SolveRoom(const RoomSolveInput& in) {
   int count = 0;
   for (auto& [base, sb] : out.bases) {
     sb.keyframes = fit[base].second;
+    sb.seen = seenRejected[base].first;
+    sb.rejected = seenRejected[base].second;
     sb.fresh = fresh[base];
     sb.devices = int(when[base].size());
     for (const auto& [device, range] : when[base]) sb.span = std::max(sb.span, range.second - range.first);

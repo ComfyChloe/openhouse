@@ -974,15 +974,28 @@ bool SessionImpl::LightMovedLockedBase(const RoomSolveOutput& out) {
   constexpr double kOneDeviceSpan = 10;              // s of one device's keyframes of the base
   const uint32_t origin = room_.Origin();
   if (room_.OriginRelearning()) return false;
-  struct Move { double mm, deg; int strikes; };
+  struct Move { double mm, deg; int strikes, rejected = 0, seen = 0; };
   std::map<uint32_t, Move> moved;
   int others = 0;
   for (const auto& [serial, b] : out.bases) {
     const RoomBase* rb = room_.Base(serial);
-    if (!rb || serial == origin || b.keyframes <= 0) continue;
-    ++others;
-    if (!RoomMap::Locked(*rb) || b.fresh <= 0 || b.devices < 1) continue;
+    if (!rb || serial == origin || !RoomMap::Locked(*rb)) continue;
     if (const auto c = lightCooldown_.find(serial); c != lightCooldown_.end() && now_ < c->second) continue;
+    // The fit can keep the old pose by rejecting what disagrees: most keyframes that see
+    // this base rejected, those without it fitting. That is all a nudge shows until the
+    // window is mostly new keyframes (nudge-01: ch3's keyframes rejected 1 -> 85, then all
+    // of them, while the solve moved it 2 mm).
+    const int othersSeen = out.keyframesUsed + out.keyframesRejected - b.seen;
+    const int othersRejected = out.keyframesRejected - b.rejected;
+    // As clear from one device as from several: three solves, a quarter rejected, under
+    // a tenth of the others.
+    if (b.rejected >= 15 && b.rejected * 4 >= b.seen && othersSeen >= 10 && othersRejected * 10 <= othersSeen) {
+      moved[serial] = {0, 0, kStrikes, b.rejected, b.seen};
+      continue;
+    }
+    if (b.keyframes <= 0) continue;
+    ++others;
+    if (b.fresh <= 0 || b.devices < 1) continue;
     if (b.devices < 2 && b.span < kOneDeviceSpan) continue;
     const double dp = (b.worldFromBase.translation() - rb->worldFromBase.translation()).norm();
     const double dr = Eigen::AngleAxisd(rb->worldFromBase.rotation().transpose() * b.worldFromBase.rotation()).angle();
@@ -993,7 +1006,9 @@ bool SessionImpl::LightMovedLockedBase(const RoomSolveOutput& out) {
       moved[serial] = {dp * 1e3, dr * 180 / M_PI, b.devices >= 2 ? kStrikes : kStrikesOneDevice};
   }
   // Every other base off at once (3+ bases): the origin moved, not all of them.
-  if (others >= 2 && int(moved.size()) == others) {
+  int farOff = 0;
+  for (const auto& [serial, m] : moved) farOff += m.rejected == 0;
+  if (others >= 2 && farOff == others && int(moved.size()) == others) {
     int strikes = kStrikes;
     for (const auto& [serial, m] : moved) strikes = std::max(strikes, m.strikes);
     moved = {{origin, {0, 0, strikes}}};
@@ -1006,6 +1021,7 @@ bool SessionImpl::LightMovedLockedBase(const RoomSolveOutput& out) {
     lightStrikes_.erase(serial);
     char why[160];
     if (serial == origin) std::snprintf(why, sizeof why, "the light places every other base elsewhere, %d solves running", d.strikes);
+    else if (d.rejected) std::snprintf(why, sizeof why, "the light no longer fits it: %d of its %d keyframes rejected, %d solves running", d.rejected, d.seen, d.strikes);
     else std::snprintf(why, sizeof why, "the light places it %.0f mm / %.2f deg away, %d solves running", d.mm, d.deg, d.strikes);
     room_.Bump(serial, why);
     lightCooldown_[serial] = now_ + kCooldown;

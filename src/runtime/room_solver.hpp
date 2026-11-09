@@ -55,6 +55,9 @@ struct SolvedBase {
   double rms = 0;  // radians
   int devices = 0;    // distinct devices behind those keyframes
   double span = 0;    // s: longest time one device's keyframes of this base cover
+  // Keyframes that saw this base, and how many of them the fit rejected. A moved base's
+  // new keyframes are all rejected (they don't fit its old pose), the others' aren't.
+  int seen = 0, rejected = 0;
 };
 
 struct RoomSolveInput {
