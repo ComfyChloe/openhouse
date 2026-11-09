@@ -444,17 +444,23 @@ RoomSolveOutput SolveRoom(const RoomSolveInput& in) {
       std::sort(v.begin(), v.end());
       medians[device] = v[v.size() / 2];
     }
+    // Only a clearly broken device, one at a time, and never most of the window:
+    // controllers fit ~3x worse than trackers by nature (fast, grazing), and leaving them
+    // out at 3x cut a live solve from 395 keyframes to 87 and moved the room 35-41 mm.
     if (medians.size() >= 3) {
+      std::string worst;
+      double worstRatio = 0;
       for (const auto& [device, m] : medians) {
         std::vector<double> others;
         for (const auto& [d, o] : medians) if (d != device) others.push_back(o);
         std::sort(others.begin(), others.end());
-        const double typical = others[others.size() / 2];
-        if (m > 3 * typical && m > 2e-4) {
-          out.excludedDevices.emplace_back(device, m / typical);
-          for (size_t i = 0; i < kfs.size(); ++i)
-            if (kfs[i].k->device == device) { use[i] = 0; excluded[i] = 1; }
-        }
+        const double ratio = m / std::max(others[others.size() / 2], 1e-9);
+        if (m > 3e-4 && ratio > worstRatio) { worstRatio = ratio; worst = device; }
+      }
+      if (worstRatio > 8 && perDevice[worst].size() * 3 <= kfs.size()) {
+        out.excludedDevices.emplace_back(worst, worstRatio);
+        for (size_t i = 0; i < kfs.size(); ++i)
+          if (kfs[i].k->device == worst) { use[i] = 0; excluded[i] = 1; }
       }
       if (!out.excludedDevices.empty()) {
         out.bases.clear();

@@ -1023,8 +1023,11 @@ bool SessionImpl::LightMovedLockedBase(const RoomSolveOutput& out) {
     const double sigma = std::sqrt((rb->positionVariance + b.positionVariance) / 3);
     const double rsigma = std::sqrt((rb->rotationVariance + b.rotationVariance) / 3);
     const double floor = std::max(kFloor, kFloorPerMetre * rb->worldFromBase.translation().norm());
+    // The solve drifting is not enough: a room fit at 400 urad wanders 10-50 mm between
+    // solves (live 2026-11-09: four false knocks at 11-51 mm, none with a keyframe
+    // rejected). A base that moved also has its keyframes rejected.
     if ((dp > std::max(floor, kSigmas * sigma) || dr > std::max(kRotFloor, kSigmas * rsigma)) &&
-        b.supportingDevices >= needDevices)
+        b.supportingDevices >= needDevices && b.rejected >= 8 && b.rejected * 8 >= b.seen)
       moved[serial] = {dp * 1e3, dr * 180 / M_PI, b.devices >= 2 ? kStrikes : kStrikesOneDevice};
   }
   // Every other base off at once (3+ bases): the origin moved, not all of them.
