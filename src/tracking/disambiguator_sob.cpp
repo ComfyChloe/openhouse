@@ -91,6 +91,9 @@ void SobDisambiguator::OnBeamWord(double t, int channel, int ootxBit, int genera
   c.sync = t;
   c.syncReal = true;
   c.ootxBit = ootxBit;
+  // The unseen revolutions' hits, as OnSensorWord and Advance drop them: left here, they
+  // would join this revolution a period early, with negative angles that read as plane 0.
+  if (revs > 1) std::erase_if(c.hits, [&](const Hit& h) { return h.time < c.sync; });
 }
 
 void SobDisambiguator::OnSensorWord(double t, int channel, int sensor) {
