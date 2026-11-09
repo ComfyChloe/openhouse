@@ -254,3 +254,15 @@ make hosttest                   # 4 simulated stations: the round, collisions, s
 The installer backs up the old flash first. lhbs flash images also carry an EEPROM
 snapshot (`LHEEDUMP`) with the unit's calibration, so a wiped unit's calibration can be
 recovered from a backup.
+
+## Laser currents (2026-11-08 / 11-10)
+
+Power regulation (`laser.c`, `apc_sample`) moves each laser's drive current within its
+boot value +-60 (never past 230, never below 1). A channel change saves every parameter,
+and used to save the regulated currents too: over a few boots 89AE90F2's ratcheted down
+to ~1 and the base faulted as the rotors spun up (3 mW of 30). Now the boot currents are
+saved there (`laser_boot_currents_for_save`); a console `save` saves what is set.
+`params_load` repairs a saved current outside 80-230 from the factory partition (else
+190) and saves it. Below a boot current of 60 the lower limit went negative and a
+decrement wrapped 0 to 255 (#21): clamped at 1.
+

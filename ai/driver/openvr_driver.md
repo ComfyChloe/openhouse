@@ -200,6 +200,14 @@ per-device `EnterStandby` callback queues `Session::PowerOff` and the stock rece
 command `ff 9f 04 6f 66 66 21` (`off!`, padded to 64 bytes). This is hardware power-off,
 not persistent disabling. HMDs and base stations do not advertise this capability.
 Global provider standby is deliberately not wired to power off every device.
+Each `EnterStandby` and power-off result is logged at INFO (idle power-off was reported
+not to work; the path matches stock, cause unknown). Of the provider's standby calls
+only `LeaveStandby` reaches the stock driver (`StockHmd::LeaveStandby`): it powers the
+headset panels back on (#20, black display after standby); its `EnterStandby` would
+power off controllers it doesn't own. The stock driver's context gets an
+`IVRProperties` proxy that drops its writes of `Prop_CurrentUniverseId_Uint64` (#19:
+its unused tracker switched SteamVR to its own universe mid-session). The `capture`
+setting is read only under SteamVR (older Monado aborts on a missing key).
 Power requests take priority over pending vibration for that receiver.
 The packet is decompilation-backed (`0x3ce5a0`, `0x3ce6e0`); callback routing and
 packet bytes are tested, but actual power-down/reconnect needs a live-device check.

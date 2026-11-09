@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(liblighthouse VERSION 1.0.0 LANGUAGES CXX)
+project(liblighthouse VERSION 1.0.2 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -40,6 +40,10 @@ option(LH_BUILD_TESTS "Build tests" ON)
 option(LH_BUILD_ORACLE_TESTS "Build tests that dlopen the original driver_lighthouse.so" ON)
 
 include(GNUInstallDirs)
+if(WIN32)
+  enable_language(RC)
+endif()
+include(cmake/windows/lh_windows_resources.cmake)
 find_package(Eigen3 REQUIRED NO_MODULE)
 find_package(Ceres REQUIRED)
 find_package(nlohmann_json REQUIRED)
@@ -144,6 +148,13 @@ if(LH_BUILD_USB)
     add_executable(lhtool apps/lhtool/main.cpp)
     target_link_libraries(lhtool PRIVATE lh_usb lh_tracking lh)
     # Started by SteamVR each session: warns when an update replaced our driver.
+    if(WIN32)
+      # Replaces the .bat + PowerShell installer (Defender flagged that pattern).
+      add_executable(openhouse-installer apps/openhouse-installer/main.cpp)
+      target_link_libraries(openhouse-installer PRIVATE nlohmann_json::nlohmann_json)
+      target_compile_options(openhouse-installer PRIVATE -municode)
+      target_link_options(openhouse-installer PRIVATE -municode)
+    endif()
     add_executable(openhouse-check WIN32 apps/openhouse-check/main.cpp)
     target_include_directories(openhouse-check PRIVATE include)
     if(WIN32)
@@ -355,6 +366,25 @@ if(LH_BUILD_TESTS)
 endif()
 
 # ---- standalone CMake package --------------------------------------------------
+# Version information in the Windows binaries.
+foreach(entry
+    "lh|openhouse tracking library"
+    "driver_lighthouse|openhouse SteamVR lighthouse driver"
+    "lhtool|openhouse replay and diagnostics tool"
+    "lhcapture|openhouse device recorder"
+    "openhouse-check|openhouse update check"
+    "openhouse-viewer|openhouse viewer"
+    "openhouse-compare|openhouse and SteamVR driver comparison"
+    "lhviz|openhouse developer viewer"
+    "openhouse-installer|openhouse driver installer")
+  string(REPLACE "|" ";" parts "${entry}")
+  list(GET parts 0 name)
+  list(GET parts 1 text)
+  if(TARGET ${name})
+    lh_windows_resources(${name} "${text}")
+  endif()
+endforeach()
+
 include(CMakePackageConfigHelpers)
 configure_package_config_file(cmake/lighthouseConfig.cmake.in
   ${CMAKE_CURRENT_BINARY_DIR}/lighthouseConfig.cmake
