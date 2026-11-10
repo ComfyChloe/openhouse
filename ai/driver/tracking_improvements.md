@@ -356,3 +356,19 @@ invalid side; subsequent trials stayed NaN and the pose was lost (issue #47, fin
   NaN comparisons; restoring the fix passes it. Full `lh_unit_tests`: 30 passed, 1
   skipped (the pre-existing Linux `/dev/full` test). This pins the cost rule; it does
   not claim a measured acquisition-rate improvement on hardware.
+
+## Output: losing a track also drops its held pose (2026-11-10)
+
+A still controller or tracker can hold its output pose. `UpdateOutput` returned early
+when `RawOutput` was invalid but left `heldPose_` intact. If the device was moved while
+lost and then reacquired on a base the room had not located yet, the first valid output
+could reuse the old resting place until the device moved again (issue #47, finding 4).
+
+* **Fix**: clear `heldPose_` on the invalid-output path, alongside the other smoothing
+  state. The deliberate primary-switch grace period still holds its coasting pose; only
+  an actually invalid raw output clears the held track.
+* **Verification**: `DeviceTrackerOutput.InvalidTrackingClearsAHeldPose` injects a held
+  pose through the existing runtime test access, runs the real invalid-output path and
+  requires the hold to be gone. Commenting out the reset makes the test fail with the
+  old held pose still present; the restored fix passes it. Full runtime suite: 25/25
+  passed. Full unit suite: 30 passed, 1 skipped. No live hardware improvement is claimed.

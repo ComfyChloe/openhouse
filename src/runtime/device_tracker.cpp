@@ -725,6 +725,12 @@ void DeviceTracker::UpdateOutput() {
   if (!smoothOutput_ || !raw.valid) {
     haveSmooth_ = false;
     coastAnchor_.reset();
+    if (!raw.valid) {
+      // A held pose belongs to the old valid track. If the device was moved while
+      // lost, keeping it makes the first valid output after reacquisition reuse the
+      // old location (including while the new primary base is still unlocated).
+      heldPose_.reset();
+    }
     output_ = raw;
     return;
   }

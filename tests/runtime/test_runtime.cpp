@@ -33,6 +33,9 @@ struct DeviceTrackerTestAccess {
   static LighthouseDirect& Core(DeviceTracker& d) { return *d.filter_; }
   static direct::DirectFilter& Filter(DeviceTracker& d) { return d.filter_->FilterForTest(); }
   static bool HasCarry(const DeviceTracker& d) { return d.carry_.has_value(); }
+  static void SetHeldPose(DeviceTracker& d, const Eigen::Isometry3d& pose) { d.heldPose_ = pose; }
+  static bool HasHeldPose(const DeviceTracker& d) { return d.heldPose_.has_value(); }
+  static void UpdateOutput(DeviceTracker& d) { d.UpdateOutput(); }
   static void Check(DeviceTracker& d, double now) { d.latestImu_ = now; d.CheckHealth(); }
   static void Acquired(DeviceTracker& d) { d.OnAcquired(); }
 };
@@ -64,6 +67,21 @@ BaseConfig Config(uint32_t serial) {
   c.serial = serial;
   c.cal.assign(14, 0.0);
   return c;
+}
+
+TEST(DeviceTrackerOutput, InvalidTrackingClearsAHeldPose) {
+  RoomMap room;
+  TrackedObjectModel model;
+  DeviceTracker tracker("LHR-HELD", model, &room);
+  DeviceTrackerTestAccess::SetHeldPose(tracker, Pose(1.0, 2.0, 3.0, 0.0));
+  ASSERT_TRUE(DeviceTrackerTestAccess::HasHeldPose(tracker));
+
+  // No bootstrap and no located primary base make RawOutput invalid. The old
+  // loss path returned without clearing heldPose_, allowing a later valid output
+  // to reuse this stale location after the device had been moved while lost.
+  DeviceTrackerTestAccess::UpdateOutput(tracker);
+  EXPECT_FALSE(tracker.Output().valid);
+  EXPECT_FALSE(DeviceTrackerTestAccess::HasHeldPose(tracker));
 }
 
 TEST(DeviceRole, ComesFromDeviceClassOnly) {
