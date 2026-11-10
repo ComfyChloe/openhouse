@@ -339,3 +339,26 @@ fastmotion5 5 -> 0 (coasting ~5 -> 0.6 %); fastmotionindex in the room: no losse
 > 5 cm in 32 s; fresh-room jumps > 5 cm: fastmotionindex 92 -> 28, spin-01 258 -> 57;
 vrchat-01 > 5 cm 5 -> 3; ms4-01 and the LH2 sessions unchanged. Cost: testswing valid
 37 -> 29 % (drops out instead of tracking a wrong pose; fewer jumps).
+
+## Frame gate: a run of refused frames survives the IMU samples between them (2026-11-10)
+
+The frame gate refuses a whole optical frame that would throw the device more than
+10 cm while most of its rows are out of gate. Its comment says the point: "never more
+than a few in a row - if it is the filter that's wrong, the light must win". The run of
+consecutive refusals is counted in `DirectFilter::frameRejectRun` and capped at
+`kMaxFrameRejectRun` (6).
+
+* **The cap never took effect.** The counter was cleared by every update that reached
+  the end of `DirectFilter::Update`, and the same `Update` serves IMU samples
+  (`gate = false`). IMU samples arrive several times per optical frame (~250 Hz on this
+  rig), so each one cleared the run and the count could never exceed 1. A filter that
+  sat more than 10 cm off therefore refused its light indefinitely, until
+  `DeviceTracker` gave up after 0.5 s of refused light and reacquired - the behaviour
+  the gate exists to prevent.
+* **Fix**: the run is cleared only by an applied optical frame
+  (`if (gate) frameRejectRun = 0;`). An IMU sample no longer ends it. One conditional,
+  no limit, threshold or constant changed.
+* **Verification**: the counter's behaviour depends on the full filter state, so the
+  check is a live A/B on a rig - the same session and the same devices, one build with
+  and one without - rather than a unit test; constructing the state that trips the
+  gate needs the original binary's fixtures. GitHub issue #47, finding 1.

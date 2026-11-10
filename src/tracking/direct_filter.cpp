@@ -314,7 +314,12 @@ bool DirectFilter::Update(const std::vector<Residual>& res, const Mat& R, const 
     ++rejectedFrames;
     return false;
   }
-  frameRejectRun = 0;
+  // A run of refused frames ends when a frame is applied - but only a FRAME. The same
+  // Update serves IMU samples (gate = false), and every IMU sample between two optical
+  // frames reset the counter, so the run could never reach kMaxFrameRejectRun and the
+  // "the light must win if the filter is wrong" rule never took effect: a filter that
+  // sat more than 10 cm off refused its light until the tracker gave up (issue #47).
+  if (gate) frameRejectRun = 0;
   for (int i = 0; i < kStateSize; i++) x[i] = xLin[i] + (i < n ? dx[i] : 0.0);
   const double inv = 1.0 / std::sqrt(x[12] * x[12] + x[9] * x[9] + x[10] * x[10] + x[11] * x[11]);
   for (int i = 9; i < 13; i++) x[i] *= inv;
