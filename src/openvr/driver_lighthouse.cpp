@@ -823,6 +823,13 @@ class Provider : public IServerTrackedDeviceProvider {
     // SteamVR's dongle pairing menu: ours owns the dongles (registered before the stock
     // driver loads, which is kept off this mailbox).
     if (options.replayPath.empty()) pairing_.Open(context_, [](const std::string& text) { Log(text); });
+    {
+      std::lock_guard lock(radioMutex_);
+      radioSession_ = session_.get();
+    }
+    stock_.SetRequestHandler([this](const char* request, char* response, uint32_t size) {
+      return RadioRequest(request, response, size);
+    });
     // A headset on USB: bring up the stock driver for its display now, inside the host's
     // device discovery window.
     using Presence = lh::openvr::StockHmd::Presence;
@@ -895,6 +902,10 @@ class Provider : public IServerTrackedDeviceProvider {
     if (thread_.joinable()) thread_.join();
     if (reportThread_.joinable()) reportThread_.join();  // a report being saved finishes first
     g_telemetry.Stop();
+    {
+      std::lock_guard lock(radioMutex_);  // waits for a request being answered
+      radioSession_ = nullptr;
+    }
     if (session_) session_->Stop();
     session_.reset();
     g_recorder.Close();
@@ -1129,11 +1140,34 @@ class Provider : public IServerTrackedDeviceProvider {
       Log("registered " + info.serial);
   }
 
+  // SteamVR's base station power management asks the headset to switch the Bluetooth
+  // receiver's radio (usb/radio_mode.hpp). That receiver is ours, so ours answers, the way
+  // the stock driver does (0x1eaa9). False: there is none, and the stock driver says so.
+  bool RadioRequest(const char* request, char* response, uint32_t size) {
+    if (!request || !response || !size) return false;
+    const bool toBluetooth = !std::strcmp(request, "set_radio_mode_ble");
+    const bool toValve = !std::strcmp(request, "set_radio_mode_valve");
+    const bool read = !std::strcmp(request, "get_radio_mode");
+    if (!toBluetooth && !toValve && !read) return false;
+    std::lock_guard lock(radioMutex_);
+    if (!radioSession_ || !radioSession_->HasBluetoothRadio()) return false;
+    const char* answer = "0";
+    if (read) {
+      if (const auto on = radioSession_->BluetoothRadioOn()) answer = *on ? "B" : "V";
+    } else if (radioSession_->SetBluetoothRadio(toBluetooth)) {
+      answer = "1";
+    }
+    std::snprintf(response, size, "%s", answer);
+    return true;
+  }
+
   std::set<std::string> loggedHaptic_;
   std::atomic<bool> loggedUnrouted_{false};
   std::mutex eventMutex_;
   std::deque<VREvent_t> hapticEvents_;
   std::unique_ptr<lh::Session> session_;
+  std::mutex radioMutex_;
+  lh::Session* radioSession_ = nullptr;  // session_ while it can answer; under radioMutex_
   IVRDriverContext* context_ = nullptr;
   lh::openvr::StockHmd stock_;
   lh::openvr::PairingMailbox pairing_;

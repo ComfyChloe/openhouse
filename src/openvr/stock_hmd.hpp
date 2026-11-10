@@ -54,6 +54,10 @@ class StockHmd {
   std::optional<Activated> TakeActivated();
   // Our driver publishes this device's pose from now on: drop the stock driver's.
   void OwnPose(uint32_t objectId);
+  // IVRDebug requests to the headset go through this first; true if it answered them.
+  // Call before Load. For what the stock driver can't do without the receivers.
+  using RequestHandler = std::function<bool(const char* request, char* response, uint32_t size)>;
+  void SetRequestHandler(RequestHandler handler) { requestHandler_ = std::move(handler); }
 
   // The stock library next to ours (or LH_STOCK_DRIVER), "" if none.
   static std::string DefaultPath();
@@ -92,6 +96,7 @@ class StockHmd {
   LogFilter* logProxy_ = nullptr;
   Context* context_ = nullptr;
   LogFn log_;
+  RequestHandler requestHandler_;
 
   std::mutex mutex_;
   std::deque<vr::VREvent_t> events_;
