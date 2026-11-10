@@ -190,9 +190,20 @@ void DeviceTracker::HandleFrame(const OpticalFrame& original) {
         // base). The limits themselves are unchanged; only the reason is recorded.
         if (streak == kRejectStreak) {
           const auto& f = filter_->Filter();
-          char text[200];
-          std::snprintf(text, sizeof text, "base %08X: %d well-lit frames rejected in a row (%s, %d sensor rows)",
-                        frame.baseSerial, streak, direct::RejectReasonName(f.lastRejectReason), f.lastRejectRows);
+          // An alternate base's limit says which slot tripped and by how much: 1.02 deg
+          // over a 1 deg limit is a threshold problem, 40 deg over it is a pair that does
+          // not fit, and the two want opposite fixes. Position prints in cm, rotation in deg.
+          char tail[96] = "";
+          if (f.lastRejectSlot >= 0 && f.lastRejectLimit > 0) {
+            const bool rot = f.lastRejectReason == direct::kRejectAltBaseRot;
+            const double scale = rot ? 57.29577951308232 : 100.0;  // rad -> deg, m -> cm
+            std::snprintf(tail, sizeof tail, "; %08X is %.2f %s over the %.2f %s limit",
+                          filter_->BaseSerial(f.lastRejectSlot + 1), f.lastRejectOver * scale,
+                          rot ? "deg" : "cm", f.lastRejectLimit * scale, rot ? "deg" : "cm");
+          }
+          char text[256];
+          std::snprintf(text, sizeof text, "base %08X: %d well-lit frames rejected in a row (%s, %d sensor rows%s)",
+                        frame.baseSerial, streak, direct::RejectReasonName(f.lastRejectReason), f.lastRejectRows, tail);
           Log(text);
         }
       } else if (filter_->LastOpticalTime() != lastOpticalBefore) {
