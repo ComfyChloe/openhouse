@@ -339,3 +339,20 @@ fastmotion5 5 -> 0 (coasting ~5 -> 0.6 %); fastmotionindex in the room: no losse
 > 5 cm in 32 s; fresh-room jumps > 5 cm: fastmotionindex 92 -> 28, spin-01 258 -> 57;
 vrchat-01 > 5 cm 5 -> 3; ms4-01 and the LH2 sessions unchanged. Cost: testswing valid
 37 -> 29 % (drops out instead of tracking a wrong pose; fewer jumps).
+
+## Pose solver: non-finite LH2 trial costs cannot steer the line search (2026-11-10)
+
+The bootstrap solver's golden-section line search compared trial costs directly. An
+LH2 sensor outside the plane model's angular domain produces NaN. With `fb` NaN and
+`fa` finite, both `fa <= fb` and `fa < fb` are false, so the search moved toward the
+invalid side; subsequent trials stayed NaN and the pose was lost (issue #47, finding 3).
+
+* **Fix**: `detail::LineSearchCostOrPenalty` leaves finite costs unchanged and maps any
+  non-finite result to the same ordered, finite penalty already used for a pose behind
+  the base. The shorter valid step is therefore preferred instead of walking into NaN.
+* **Verification**: `PoseSolver.NonFiniteLineSearchCostBecomesAnOrderedBehindPenalty`
+  covers finite, NaN and infinity inputs and checks that the penalty increases with the
+  trial distance. Restoring the old `return cost` behaviour makes the test fail with
+  NaN comparisons; restoring the fix passes it. Full `lh_unit_tests`: 30 passed, 1
+  skipped (the pre-existing Linux `/dev/full` test). This pins the cost rule; it does
+  not claim a measured acquisition-rate improvement on hardware.
