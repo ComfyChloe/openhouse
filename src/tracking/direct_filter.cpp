@@ -133,6 +133,18 @@ bool DirectFilter::RejectCorrection(const Vec& dx) {
     lastRejectOver = lastRejectLimit = 0;
     return true;
   };
+  // A scalar limit (IMU rotation, gravity, angular rate): record the value and the limit
+  // it was compared against, not just which one it was. The alternate-base limits below
+  // already did this; without it for these, a log cannot tell a correction that is 2.1
+  // deg over a 2 deg converged limit (a threshold question) from a 30 deg one (a
+  // calibration question), which is exactly the ambiguity the diagnostic exists to end.
+  const auto refuseValue = [this](int reason, double over, double limit) {
+    lastRejectReason = reason;
+    lastRejectSlot = -1;
+    lastRejectOver = over;
+    lastRejectLimit = limit;
+    return true;
+  };
   // An alternate base's limit: record which base slot tripped it and by how much.
   const auto refuseAlt = [this](int reason, int slot, double over, double limit) {
     lastRejectReason = reason;
@@ -145,22 +157,22 @@ bool DirectFilter::RejectCorrection(const Vec& dx) {
     if (std::isnan(dx[i] - dx[i])) return refuse(kRejectNaN);
   auto d = [&](int i) { return i < dx.size() ? dx[i] : 0.0; };
   const double rot = std::sqrt(d(30) * d(30) + d(28) * d(28) + d(29) * d(29));
-  if (kMaxImuRot < rot) return refuse(kRejectImuRot);
+  if (kMaxImuRot < rot) return refuseValue(kRejectImuRot, rot, kMaxImuRot);
   bool skipTilt = false;
   if (updateCount < 0x105) {
-    if (kMaxGravMag < std::fabs(d(18))) return refuse(kRejectGravMag);
+    const double g = std::fabs(d(18));
+    if (kMaxGravMag < g) return refuseValue(kRejectGravMag, g, kMaxGravMag);
     if (updateCount < 0xc9) skipTilt = true;
   } else {
-    if (kMaxImuRotConverged < rot) return refuse(kRejectImuRot);
+    if (kMaxImuRotConverged < rot) return refuseValue(kRejectImuRot, rot, kMaxImuRotConverged);
     const double g = std::fabs(d(18));
-    if (kMaxGravMag < g) return refuse(kRejectGravMag);
-    if (kMaxGravMagConverged < g) return refuse(kRejectGravMag);
+    if (kMaxGravMag < g) return refuseValue(kRejectGravMag, g, kMaxGravMag);
+    if (kMaxGravMagConverged < g) return refuseValue(kRejectGravMag, g, kMaxGravMagConverged);
   }
-  if (!skipTilt && kMaxGravTilt < std::sqrt(d(16) * d(16) + d(17) * d(17))) {
-    return refuse(kRejectGravTilt);
-  }
+  const double tilt = std::sqrt(d(16) * d(16) + d(17) * d(17));
+  if (!skipTilt && kMaxGravTilt < tilt) return refuseValue(kRejectGravTilt, tilt, kMaxGravTilt);
   const double w2 = d(13) * d(13) + d(14) * d(14) + d(15) * d(15);
-  if (omegaCorrectionLimit2 <= w2) return refuse(kRejectOmega);
+  if (omegaCorrectionLimit2 <= w2) return refuseValue(kRejectOmega, std::sqrt(w2), std::sqrt(omegaCorrectionLimit2));
   for (int s = 0; s < 3; s++) {
     if (!altBaseActive[s]) continue;
     const int k = kAltBaseIndex[s];
@@ -169,7 +181,11 @@ bool DirectFilter::RejectCorrection(const Vec& dx) {
     const double rotAlt = std::sqrt(d(k + 5) * d(k + 5) + d(k + 3) * d(k + 3) + d(k + 4) * d(k + 4));
     if (kMaxAltBaseRot < rotAlt) return refuseAlt(kRejectAltBaseRot, s, rotAlt, kMaxAltBaseRot);
   }
+  // A frame that passes must leave no diagnostic behind: a stale slot or limit from the
+  // previous refusal would be read as belonging to this frame.
   lastRejectReason = kRejectNone;
+  lastRejectSlot = -1;
+  lastRejectOver = lastRejectLimit = 0;
   return false;
 }
 
