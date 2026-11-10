@@ -196,11 +196,19 @@ void DeviceTracker::HandleFrame(const OpticalFrame& original) {
           // cm, rotation in deg. The correction is the whole refused step, not the excess.
           char tail[96] = "";
           if (f.lastRejectSlot >= 0 && f.lastRejectLimit > 0) {
-            const bool rot = f.lastRejectReason == direct::kRejectAltBaseRot;
-            const double scale = rot ? 57.29577951308232 : 100.0;  // rad -> deg, m -> cm
+            const auto u = direct::RejectUnitsFor(f.lastRejectReason);
             std::snprintf(tail, sizeof tail, "; %08X: correction %.2f %s, limit %.2f %s",
-                          filter_->BaseSerial(f.lastRejectSlot + 1), f.lastRejectOver * scale,
-                          rot ? "deg" : "cm", f.lastRejectLimit * scale, rot ? "deg" : "cm");
+                          filter_->BaseSerial(f.lastRejectSlot + 1), f.lastRejectOver * u.scale, u.unit,
+                          f.lastRejectLimit * u.scale, u.unit);
+          } else if (f.lastRejectSlot < 0 && f.lastRejectLimit > 0) {
+            // A scalar limit (IMU rotation, gravity, angular rate): the reason says which
+            // one refused the frame, and the value says how far over it was - which is
+            // the difference between a threshold problem (2.1 deg against a 2 deg limit)
+            // and a pair that does not fit at all (40 deg). Without this the value was
+            // recorded and never reached the log.
+            const auto u = direct::RejectUnitsFor(f.lastRejectReason);
+            std::snprintf(tail, sizeof tail, "; correction %.2f %s, limit %.2f %s",
+                          f.lastRejectOver * u.scale, u.unit, f.lastRejectLimit * u.scale, u.unit);
           }
           char text[256];
           std::snprintf(text, sizeof text, "base %08X: %d well-lit frames rejected in a row (%s, %d sensor rows%s)",

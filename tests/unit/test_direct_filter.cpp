@@ -149,4 +149,28 @@ TEST(RejectDiagnostics, ACleanFrameAfterARefusalClearsTheSlotAndTheValue) {
   EXPECT_DOUBLE_EQ(f.lastRejectLimit, 0.0);
 }
 
+// A refused correction has to be printed in the unit its limit is written in: the
+// rotation limits are radians in the filter, an alternate base's position is metres.
+// Printing 0.03 "deg" for a radian limit - or a radian limit as "cm" - would make the
+// number unreadable, which is the whole point of recording it.
+TEST(RejectDiagnostics, RefusalUnitsMatchTheLimitTheyWereComparedWith) {
+  using lh::direct::RejectUnitsFor;
+  const auto imuRot = RejectUnitsFor(lh::direct::kRejectImuRot);
+  EXPECT_DOUBLE_EQ(imuRot.scale, 57.29577951308232);
+  EXPECT_STREQ(imuRot.unit, "deg");
+  const auto gravTilt = RejectUnitsFor(lh::direct::kRejectGravTilt);
+  EXPECT_STREQ(gravTilt.unit, "deg");
+  const auto altRot = RejectUnitsFor(lh::direct::kRejectAltBaseRot);
+  EXPECT_STREQ(altRot.unit, "deg");
+  const auto altTrans = RejectUnitsFor(lh::direct::kRejectAltBaseTrans);
+  EXPECT_DOUBLE_EQ(altTrans.scale, 100.0);
+  EXPECT_STREQ(altTrans.unit, "cm");
+  const auto gravMag = RejectUnitsFor(lh::direct::kRejectGravMag);
+  EXPECT_DOUBLE_EQ(gravMag.scale, 1.0);
+  EXPECT_STREQ(gravMag.unit, "m/s2");
+  const auto omega = RejectUnitsFor(lh::direct::kRejectOmega);
+  EXPECT_DOUBLE_EQ(omega.scale, 1.0);
+  EXPECT_STREQ(omega.unit, "rad/s");
+}
+
 }  // namespace
