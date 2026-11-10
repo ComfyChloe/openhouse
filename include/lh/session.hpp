@@ -105,6 +105,9 @@ struct DeviceInfo {
   std::string deviceClass;      // raw config device_class
   ControllerType controllerType = ControllerType::Index;  // Controller role only
   std::string model, manufacturer, renderModel, controllerRole;  // "left_hand"/"right_hand"
+  // Where this vendor's assets live, from the device's own JSON: "tundra_labs" for a
+  // Tundra, empty for HTC hardware (which is what the driver assumes when it is absent).
+  std::string resourceRoot, inputProfile;
   bool connected = false;
   bool enabled = true;          // disabled devices are listed but ignored entirely
   std::optional<int> batteryPercent;

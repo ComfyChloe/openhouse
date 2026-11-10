@@ -196,6 +196,10 @@ struct DeviceStatic {
   std::string baseChannel;  // base stations: "A" "b" "c", lhbs multi "1".."4"
   lh::ControllerType controllerType = lh::ControllerType::Index;
   bool lh2 = false;         // base stations: a 2.0 one
+  // The device's own resource root and input profile (a Tundra says "tundra_labs" and
+  // "{tundra_labs}/input/tundra_tracker_profile.json"). Empty means HTC's, which is
+  // what every Vive tracker here asks for.
+  std::string resourceRoot, inputProfile;
 };
 
 class Device : public ITrackedDeviceServerDriver {
@@ -525,11 +529,21 @@ class Device : public ITrackedDeviceServerDriver {
         break;
       }
       default: {  // trackers (inputs ignored by design)
+        // A tracker is not always HTC. The Tundra's own JSON asks for resource_root
+        // "tundra_labs" and its own input profile, and SteamVR ships both
+        // (drivers/tundra_labs/resources: icons, input/tundra_tracker_profile.json,
+        // rendermodels). Publishing {htc} for those made SteamVR draw a Tundra as a
+        // Vive Tracker and bind the Vive tracker profile; only the render model was
+        // already taken from the config. HTC's values stay the fallback, which is
+        // exactly what the Vive Tracker 1.0/2.0/3.0 configs ask for.
+        const std::string root = info_.resourceRoot.empty() ? "htc" : info_.resourceRoot;
+        const std::string icons = "{" + root + "}/icons/tracker_status_";
         props->SetStringProperty(c, Prop_ManufacturerName_String, info_.manufacturer.empty() ? "HTC" : info_.manufacturer.c_str());
         props->SetStringProperty(c, Prop_ModelNumber_String, info_.model.empty() ? "VIVE Tracker" : info_.model.c_str());
-        props->SetStringProperty(c, Prop_ResourceRoot_String, "htc");
-        props->SetStringProperty(c, Prop_ControllerType_String, "vive_tracker");
-        props->SetStringProperty(c, Prop_InputProfilePath_String, "{htc}/input/vive_tracker_profile.json");
+        props->SetStringProperty(c, Prop_ResourceRoot_String, root.c_str());
+        props->SetStringProperty(c, Prop_ControllerType_String, "vive_tracker");  // tundra_tracker_profile.json declares this too
+        props->SetStringProperty(c, Prop_InputProfilePath_String,
+                                 info_.inputProfile.empty() ? "{htc}/input/vive_tracker_profile.json" : info_.inputProfile.c_str());
         props->SetStringProperty(c, Prop_RenderModelName_String,
                                  info_.renderModel.empty() ? "{htc}vr_tracker_vive_1_0" : info_.renderModel.c_str());
         props->SetStringProperty(c, Prop_RegisteredDeviceType_String, ("htc/vive_tracker" + info_.serial).c_str());
@@ -537,14 +551,14 @@ class Device : public ITrackedDeviceServerDriver {
         props->SetInt32Property(c, Prop_DeviceClass_Int32, TrackedDeviceClass_GenericTracker);
         props->SetBoolProperty(c, Prop_DeviceProvidesBatteryStatus_Bool, true);
         props->SetBoolProperty(c, Prop_Identifiable_Bool, true);  // enables SteamVR's Identify button
-        props->SetStringProperty(c, Prop_NamedIconPathDeviceOff_String, "{htc}/icons/tracker_status_off.png");
-        props->SetStringProperty(c, Prop_NamedIconPathDeviceSearching_String, "{htc}/icons/tracker_status_searching.gif");
-        props->SetStringProperty(c, Prop_NamedIconPathDeviceSearchingAlert_String, "{htc}/icons/tracker_status_searching_alert.gif");
-        props->SetStringProperty(c, Prop_NamedIconPathDeviceReady_String, "{htc}/icons/tracker_status_ready.png");
-        props->SetStringProperty(c, Prop_NamedIconPathDeviceReadyAlert_String, "{htc}/icons/tracker_status_ready_alert.png");
-        props->SetStringProperty(c, Prop_NamedIconPathDeviceNotReady_String, "{htc}/icons/tracker_status_error.png");
-        props->SetStringProperty(c, Prop_NamedIconPathDeviceStandby_String, "{htc}/icons/tracker_status_standby.png");
-        props->SetStringProperty(c, Prop_NamedIconPathDeviceAlertLow_String, "{htc}/icons/tracker_status_ready_low.png");
+        props->SetStringProperty(c, Prop_NamedIconPathDeviceOff_String, (icons + "off.png").c_str());
+        props->SetStringProperty(c, Prop_NamedIconPathDeviceSearching_String, (icons + "searching.gif").c_str());
+        props->SetStringProperty(c, Prop_NamedIconPathDeviceSearchingAlert_String, (icons + "searching_alert.gif").c_str());
+        props->SetStringProperty(c, Prop_NamedIconPathDeviceReady_String, (icons + "ready.png").c_str());
+        props->SetStringProperty(c, Prop_NamedIconPathDeviceReadyAlert_String, (icons + "ready_alert.png").c_str());
+        props->SetStringProperty(c, Prop_NamedIconPathDeviceNotReady_String, (icons + "error.png").c_str());
+        props->SetStringProperty(c, Prop_NamedIconPathDeviceStandby_String, (icons + "standby.png").c_str());
+        props->SetStringProperty(c, Prop_NamedIconPathDeviceAlertLow_String, (icons + "ready_low.png").c_str());
         break;
       }
     }
@@ -1109,7 +1123,7 @@ class Provider : public IServerTrackedDeviceProvider {
       const auto& d = *dp;
       if (devices_.count(d.info.serial) || !d.info.enabled || d.info.role == lh::DeviceRole::Hmd) continue;
       DeviceStatic info{d.info.serial, d.info.model, d.info.manufacturer, RenderModel(d.info.renderModel), d.info.controllerRole,
-                        d.info.role, {}, d.info.controllerType};
+                        d.info.role, {}, d.info.controllerType, false, d.info.resourceRoot, d.info.inputProfile};
       Add(info, d.info.role == lh::DeviceRole::Controller ? TrackedDeviceClass_Controller
                                                           : TrackedDeviceClass_GenericTracker);
     }
