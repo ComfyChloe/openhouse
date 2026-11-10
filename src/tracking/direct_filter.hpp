@@ -107,12 +107,12 @@ class DirectFilter {
   // Diagnostics: which limit refused the last frame, and how many sensor rows it had.
   int lastRejectReason = kRejectNone;
   int lastRejectRows = 0;
-  // When an alternate base's limit refused the frame: which slot (0..2, else -1) and
-  // by how much. Without the magnitude a log cannot tell a base that is 1.02 deg out
+  // When an alternate base's limit refused the frame: which slot (0..2, else -1), the
+  // size of the refused correction, and the limit it exceeded. Without the magnitude a log cannot tell a base that is 1.02 deg out
   // (a limit worth loosening) from one that is 40 deg out (a pair that does not fit at
   // all), and those want opposite fixes.
   int lastRejectSlot = -1;
-  double lastRejectOver = 0;   // metres for position, radians for rotation
+  double lastRejectOver = 0;   // the refused correction: metres for position, radians for rotation
   double lastRejectLimit = 0;  // the limit that was exceeded, same unit
 
   void DefaultState();                        // 0x3511a0 (state only)
