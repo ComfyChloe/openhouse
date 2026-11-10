@@ -7,6 +7,7 @@
 // problem, which is exactly what it is for.
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 
 #include "tracking/direct_filter.hpp"
@@ -171,6 +172,71 @@ TEST(RejectDiagnostics, RefusalUnitsMatchTheLimitTheyWereComparedWith) {
   const auto omega = RejectUnitsFor(lh::direct::kRejectOmega);
   EXPECT_DOUBLE_EQ(omega.scale, 1.0);
   EXPECT_STREQ(omega.unit, "rad/s");
+}
+
+// Three optical position rows plus the final non-optical normalizer row. The
+// optical correction is about 35 cm, and all three rows are outliers at the
+// configured sigma, so the whole-frame gate is the only thing that can refuse it.
+std::vector<lh::direct::Residual> OpticalPositionResidual() {
+  std::vector<lh::direct::Residual> res(2);
+  res[0].m = 3;
+  res[0].eval = [](const double* x, double* out) {
+    for (int i = 0; i < 3; ++i) out[i] = x[i];
+  };
+  res[0].evalJet = [](const lh::direct::Jet* x, lh::direct::Jet* out) {
+    for (int i = 0; i < 3; ++i) out[i] = x[i];
+  };
+  res[1].m = 1;
+  res[1].eval = [](const double*, double* out) { out[0] = 0; };
+  res[1].evalJet = [](const lh::direct::Jet*, lh::direct::Jet* out) {
+    out[0] = lh::direct::Jet(0.0);
+  };
+  return res;
+}
+
+// A zero IMU-style update: gate=false and no optical rows. It must not clear a
+// run of refused optical frames; only an applied optical (gated) update may.
+std::vector<lh::direct::Residual> ImuResidual() {
+  std::vector<lh::direct::Residual> res(1);
+  res[0].m = 1;
+  res[0].eval = [](const double*, double* out) { out[0] = 0; };
+  res[0].evalJet = [](const lh::direct::Jet*, lh::direct::Jet* out) {
+    out[0] = lh::direct::Jet(0.0);
+  };
+  return res;
+}
+
+TEST(DirectFilter, FrameGateRunSurvivesImuUpdatesUntilAnOpticalFrameIsApplied) {
+  lh::direct::DirectFilter f;
+  f.DefaultState();
+  std::copy(std::begin(f.x), std::end(f.x), f.xLin);
+  f.Ppred = lh::direct::Mat::Identity(f.n, f.n);
+  f.gateSigma = 0.01;
+  f.updateCount = 200;
+
+  const auto optical = OpticalPositionResidual();
+  const auto imu = ImuResidual();
+  const lh::direct::Mat opticalR = 1e-9 * lh::direct::Mat::Identity(4, 4);
+  lh::direct::Vec opticalZ(4);
+  opticalZ << 0.2, 0.2, 0.2, 0.0;
+  const lh::direct::Mat imuR = lh::direct::Mat::Identity(1, 1);
+  const lh::direct::Vec imuZ = lh::direct::Vec::Zero(1);
+
+  for (int frame = 1; frame <= lh::direct::DirectFilter::kMaxFrameRejectRun; ++frame) {
+    EXPECT_FALSE(f.Update(optical, opticalR, opticalZ, true)) << "optical frame " << frame;
+    EXPECT_EQ(f.frameRejectRun, frame) << "optical frame " << frame;
+    ASSERT_TRUE(f.Update(imu, imuR, imuZ, false)) << "IMU sample after frame " << frame;
+    EXPECT_EQ(f.frameRejectRun, frame)
+        << "an ungated IMU sample cleared the refused-optical run at frame " << frame;
+  }
+  EXPECT_EQ(f.rejectedFrames, 6u);
+
+  // The cap is meant to let the light win when the filter itself is stuck wrong.
+  // Before the fix, every intervening IMU sample reset the run, so this seventh
+  // frame was refused too and the cap could never be reached.
+  EXPECT_TRUE(f.Update(optical, opticalR, opticalZ, true));
+  EXPECT_EQ(f.frameRejectRun, 0);
+  EXPECT_EQ(f.rejectedFrames, 6u);
 }
 
 }  // namespace

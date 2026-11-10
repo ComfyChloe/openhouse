@@ -358,7 +358,17 @@ consecutive refusals is counted in `DirectFilter::frameRejectRun` and capped at
 * **Fix**: the run is cleared only by an applied optical frame
   (`if (gate) frameRejectRun = 0;`). An IMU sample no longer ends it. One conditional,
   no limit, threshold or constant changed.
-* **Verification**: the counter's behaviour depends on the full filter state, so the
-  check is a live A/B on a rig - the same session and the same devices, one build with
-  and one without - rather than a unit test; constructing the state that trips the
-  gate needs the original binary's fixtures. GitHub issue #47, finding 1.
+* **Unit verification**: `tests/unit/test_direct_filter.cpp` drives the real
+  `DirectFilter::Update` with three optical position rows and a non-optical row. Six
+  frames are refused with an IMU-style (`gate = false`) update between each; the run
+  must survive every IMU sample, and the seventh optical frame must be applied. With
+  the old unconditional reset the test fails at the first IMU sample and rejects the
+  seventh frame; with the fix it passes. Full `lh_unit_tests`: 30 passed, 1 skipped
+  (the pre-existing Linux `/dev/full` test).
+* **Live A/B (rig A, 2026-11-10)**: eight-minute fix-off / fix-on / fix-off arms gave
+  refused-light reacquires 77 / 82 / 77 and reacquire completions 146 / 130 / 121. The
+  fix therefore did **not** improve the measured symptom on that rig. The arms were
+  also confounded by changing light and a fifth device attaching between arms, so this
+  is not evidence that the source-level cap bug is absent; it is evidence that this
+  change is not a demonstrated remedy for the day's tracking problem. Keep the change
+  draft and do not claim a live improvement. GitHub issue #47, finding 1.
