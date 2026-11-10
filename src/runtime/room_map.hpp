@@ -107,6 +107,10 @@ class RoomMap {
   // base (OriginGauge), so the room, and what devices report in it, stay put.
   void Bump(uint32_t serial, const std::string& why);
   bool OriginRelearning() const { return originRelearn_; }
+  // True while ANY base's pose is being relearned, the origin included. A bump throws
+  // that base's pose away and lets the solver re-place it, so the solved geometry is in
+  // flux until it settles; nothing else can be attributed to a base in that state.
+  bool AnyRelearning() const;
   uint32_t OriginGauge() const;  // the base held fixed meanwhile; 0 if none
   void ApplyOriginSolved(const Eigen::Isometry3d& worldFromOrigin, double positionVariance, int keyframes);
   uint64_t OriginEpoch() const { return originEpoch_; }  // bumps when the origin was re-placed

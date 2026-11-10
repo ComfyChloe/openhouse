@@ -526,6 +526,14 @@ void RoomMap::Observe(const std::string& device, uint32_t primary, uint32_t alt,
   Changed();
 }
 
+bool RoomMap::AnyRelearning() const {
+  const Room* room = Active();
+  if (!room) return false;
+  for (const auto& [serial, b] : room->bases)
+    if (b.relearn) return true;
+  return originRelearn_;
+}
+
 uint32_t RoomMap::Origin() const {
   if (const Room* room = Active())
     for (const auto& [serial, b] : room->bases)

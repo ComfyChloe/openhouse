@@ -990,7 +990,14 @@ bool SessionImpl::LightMovedLockedBase(const RoomSolveOutput& out) {
   constexpr int kStrikes = 3, kStrikesOneDevice = 5;  // solves in a row (1-4 s apart)
   constexpr double kOneDeviceSpan = 10;              // s of one device's keyframes of the base
   const uint32_t origin = room_.Origin();
-  if (room_.OriginRelearning()) return false;
+  // One physical event, one relearn. Refusing to attribute moves while the ORIGIN is
+  // being relearned is already here, because the room's geometry is in flux then; the
+  // same holds while any other base is being relearned. On the 2026-11-10 capture one
+  // base drifting on a tripod produced F1D944EB bumped at 184 mm / 3.36 deg, then the
+  // origin ("the light places every other base elsewhere"), then AE51C768 at 144 mm /
+  // 2.95 deg - three bases that had not moved - and 48 pair-loosening events in 15
+  // minutes. The first bump is the event; the next two are the room flinching.
+  if (room_.AnyRelearning()) return false;
   struct Move { double mm, deg; int strikes, rejected = 0, seen = 0; };
   std::map<uint32_t, Move> moved;
   int others = 0;
