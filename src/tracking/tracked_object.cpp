@@ -67,6 +67,11 @@ bool TrackedObjectModel::FromJson(const std::string& text, TrackedObjectModel* o
     read("acc_bias", &m.accBias); read("acc_scale", &m.accScale);
     read("gyro_bias", &m.gyroBias); read("gyro_scale", &m.gyroScale);
     read("plus_x", &m.imuPlusX); read("plus_z", &m.imuPlusZ); read("position", &m.imuPosition);
+    // Which calibration fields the config actually carried: a device with none of them
+    // (a Tundra Tracker) has no accelerometer scale or bias of its own, and the
+    // defaults below are indistinguishable from real values - so record the presence.
+    m.hasImuCalibration = imu.contains("acc_bias") || imu.contains("acc_scale") ||
+                           imu.contains("gyro_bias") || imu.contains("gyro_scale");
     for (double scale : m.accScale)
       if (scale <= 0) throw std::runtime_error("acc_scale must be positive");
     if (j.contains("trackref_from_imu")) {
@@ -117,6 +122,42 @@ TrackedObjectModel TrackedObjectModel::InImuFrame() const {
   result.imuPosition = {};
   result.objectFromImuRotation = {1, 0, 0, 0};
   return result;
+}
+
+bool ApplyLearnedImuCalibration(TrackedObjectModel* model, const std::string& steamDatabaseJson,
+                                const std::string& serial, std::string* error) {
+  if (!model) { if (error) *error = "null tracked-object model"; return false; }
+  // The device's own config wins: it is what the stock driver uses.
+  if (model->hasImuCalibration) return false;
+  if (steamDatabaseJson.empty() || serial.empty()) return false;
+  try {
+    const auto j = nlohmann::json::parse(steamDatabaseJson);
+    if (!j.contains("known_objects")) return false;
+    for (const auto& object : j.at("known_objects")) {
+      if (!object.contains("serialNumber") || !object.contains("imu")) continue;
+      if (object.at("serialNumber").get<std::string>() != serial) continue;
+      const auto& imu = object.at("imu");
+      std::array<double, 3> accBias{}, accScale{}, gyroBias{};
+      if (imu.contains("acc_bias") && !Vec3(imu.at("acc_bias"), &accBias))
+        throw std::runtime_error("bad learned acc_bias");
+      if (imu.contains("acc_scale") && !Vec3(imu.at("acc_scale"), &accScale))
+        throw std::runtime_error("bad learned acc_scale");
+      if (imu.contains("gyro_bias") && !Vec3(imu.at("gyro_bias"), &gyroBias))
+        throw std::runtime_error("bad learned gyro_bias");
+      for (double s : accScale)
+        if (s <= 0) throw std::runtime_error("learned acc_scale must be positive");
+      bool any = false;
+      if (imu.contains("acc_bias")) { model->accBias = accBias; any = true; }
+      if (imu.contains("acc_scale")) { model->accScale = accScale; any = true; }
+      if (imu.contains("gyro_bias")) { model->gyroBias = gyroBias; any = true; }
+      model->hasImuCalibration = any;
+      return any;
+    }
+    return false;
+  } catch (const std::exception& e) {
+    if (error) *error = e.what();
+    return false;
+  }
 }
 
 }  // namespace lh

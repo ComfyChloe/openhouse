@@ -287,6 +287,10 @@ class SessionImpl final : public Session, public InputSinkBase {
   std::map<uint32_t, tdm::TdmDisambiguator::Identity> identities_;
   RoomMap room_;
   std::string roomPath_, settingsPath_, preinitDir_;
+  // SteamVR's learned per-unit IMU calibration (lighthousedb.json), read even when the
+  // room import is off: a device whose own config carries no calibration would
+  // otherwise run on identity values.
+  std::string steamCalibrationDb_;
   std::map<std::string, std::string> preinitFiles_;
   uint64_t roomResets_ = 0;
   bool roomFileSeen_ = false;
@@ -351,6 +355,20 @@ bool SessionImpl::Start(std::string* error) {
   }
   if (!steamDb.empty() && steamDb != "-") {
     if (!room_.ImportSteamDatabase(ReadFile(steamDb), &err)) Emit(SessionEventType::Log, "", err);
+  }
+  // SteamVR's learned per-unit IMU calibration, read even when the room import above
+  // is off ("-"). The live driver sets that, so without this the learned values are
+  // never read: LoadBasePoses (the only parser of known_objects[].imu) is called by
+  // the CLI tool alone. A device whose own config carries no calibration block - a
+  // Tundra Tracker - then runs on identity scale and zero bias.
+  {
+    std::string calibrationDb = steamDb;
+    if (calibrationDb.empty() || calibrationDb == "-") {
+      std::vector<std::string> candidates;
+      if (!replay) candidates.push_back(platform::SteamConfigDirectory() + "/lighthousedb.json");
+      calibrationDb = FirstExisting(candidates);
+    }
+    if (!calibrationDb.empty() && calibrationDb != "-") steamCalibrationDb_ = ReadFile(calibrationDb);
   }
   {
     std::lock_guard lock(mutex_);
@@ -549,6 +567,14 @@ bool SessionImpl::SetUpDevice(const DeviceId& id, const std::string& config) {
     TrackedObjectModel model;
     std::string err;
     if (!TrackedObjectModel::FromJson(config, &model, &err)) throw std::runtime_error(err);
+    // A device whose own config has no accelerometer scale or bias gets SteamVR's
+    // learned values for that serial, if SteamVR has them. The device's own values
+    // always win; this only fills a gap.
+    if (!model.hasImuCalibration && !steamCalibrationDb_.empty()) {
+      std::string calError;
+      if (ApplyLearnedImuCalibration(&model, steamCalibrationDb_, id, &calError))
+        Emit(SessionEventType::Log, id, "no IMU calibration in the device config; using SteamVR's learned values");
+    }
     // A radio reconnect is a new timestamp/protocol epoch, not a duplicate attach.
     d.haveClock = false;
     d.clockOffset = 0;

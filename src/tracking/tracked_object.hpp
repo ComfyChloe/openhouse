@@ -21,6 +21,10 @@ struct TrackedObjectModel {
   std::array<double, 3> imuPlusX{1, 0, 0}, imuPlusZ{0, 0, 1}, imuPosition{};
   std::array<double, 4> objectFromImuRotation{1, 0, 0, 0};  // w,x,y,z
   std::string serial, deviceClass;
+  // The config carried an IMU calibration block (acc_bias / acc_scale / gyro_bias).
+  // False for a device whose config has none - a Tundra Tracker - which then runs on
+  // identity values unless SteamVR's learned calibration is used instead.
+  bool hasImuCalibration = false;
   int sensorType = 0;
   bool sensorTypeKnown = false;  // from "sensor_type" (device hardware id), not a guess
 
@@ -35,5 +39,12 @@ struct TrackedObjectModel {
 
   static bool FromJson(const std::string& json, TrackedObjectModel* out, std::string* error = nullptr);
 };
+
+// SteamVR's learned per-unit IMU calibration for one device, from lighthousedb.json
+// ("known_objects"[].imu). Applied ONLY when the device's own config carries no
+// calibration block: a device that has its own keeps it. Returns true when values were
+// applied, false when the device already had its own or SteamVR holds none for it.
+bool ApplyLearnedImuCalibration(TrackedObjectModel* model, const std::string& steamDatabaseJson,
+                                const std::string& serial, std::string* error = nullptr);
 
 }  // namespace lh
