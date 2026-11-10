@@ -109,7 +109,16 @@ struct Tracker::Impl {
   void Drain(const DeviceId& id, Device& d) {
     BaseConfig config; BaseDynamicState dynamic;
     while (d.source->PopBaseConfig(&config, &dynamic)) {
-      d.direct->OnBaseConfig(config, dynamic);
+      // Keep it: the calibration came from the light, not from this device, so it must
+      // survive this device's next reset (a gap, a detach/reattach, a LoadBasePoses) and
+      // be usable by the other devices too. Before this it went to the current filter
+      // only, and a rebuilt filter has no entry for that base, so OnFrame dropped every
+      // frame of it until OOTX was decoded again - seconds of a base the device can see
+      // and cannot use (issue #47, finding 2). SessionImpl::Process already shares a
+      // decoded config with the other devices; this is the same rule for lh::Tracker.
+      bases[config.serial] = {config, dynamic};
+      for (auto& entry : devices)
+        if (entry.second.direct) entry.second.direct->OnBaseConfig(config, dynamic);
       Log(id + ": OOTX base " + std::to_string(config.serial));
     }
     ImuSample imu;
