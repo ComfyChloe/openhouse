@@ -196,6 +196,11 @@ struct DeviceStatic {
   std::string baseChannel;  // base stations: "A" "b" "c", lhbs multi "1".."4"
   lh::ControllerType controllerType = lh::ControllerType::Index;
   bool lh2 = false;         // base stations: a 2.0 one
+  // The receiver this device is paired through, published as
+  // Prop_ConnectedWirelessDongle_String. SteamVR's own power UI and OyasumiVR require
+  // that property as well as Prop_DeviceCanPowerOff_Bool: a wireless device with no
+  // dongle named is treated as one that cannot be powered off.
+  std::string wirelessDongle;
 };
 
 class Device : public ITrackedDeviceServerDriver {
@@ -442,6 +447,11 @@ class Device : public ITrackedDeviceServerDriver {
     props->SetBoolProperty(c, Prop_CanUnifyCoordinateSystemWithHmd_Bool, true);
     props->SetBoolProperty(c, Prop_DeviceCanPowerOff_Bool,
                            info_.role == lh::DeviceRole::Controller || info_.role == lh::DeviceRole::Tracker);
+    // ...and the receiver it is paired through, which is what a power-off tool hands to
+    // lighthouse_console as /serial. Without it OyasumiVR lists every device but forces
+    // its power method to None, so nothing can be turned off (issue #37).
+    if (!info_.wirelessDongle.empty())
+      props->SetStringProperty(c, Prop_ConnectedWirelessDongle_String, info_.wirelessDongle.c_str());
     switch (info_.role) {
       case lh::DeviceRole::Controller: {
         const bool left = info_.controllerRole == "left_hand";
@@ -1108,8 +1118,13 @@ class Provider : public IServerTrackedDeviceProvider {
     for (const auto* dp : order) {
       const auto& d = *dp;
       if (devices_.count(d.info.serial) || !d.info.enabled || d.info.role == lh::DeviceRole::Hmd) continue;
+      // Which receiver holds this device. The stock driver publishes it and a drop-in has
+      // to as well; empty when the device is not paired through one.
+      std::string dongle;
+      for (const auto& r : session_->Receivers())
+        if (r.connected == d.info.serial) { dongle = r.serial; break; }
       DeviceStatic info{d.info.serial, d.info.model, d.info.manufacturer, RenderModel(d.info.renderModel), d.info.controllerRole,
-                        d.info.role, {}, d.info.controllerType};
+                        d.info.role, {}, d.info.controllerType, false, dongle};
       Add(info, d.info.role == lh::DeviceRole::Controller ? TrackedDeviceClass_Controller
                                                           : TrackedDeviceClass_GenericTracker);
     }
