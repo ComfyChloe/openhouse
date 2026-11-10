@@ -286,6 +286,7 @@ if(LH_BUILD_TESTS)
     tests/unit/test_tracking_source.cpp
     tests/unit/test_pose_solver.cpp
     tests/unit/test_tracker.cpp
+    tests/unit/test_direct_filter.cpp
     tests/unit/test_disambiguator_sob.cpp)
   target_include_directories(lh_unit_tests PRIVATE src)
   target_link_libraries(lh_unit_tests PRIVATE lh_tracking GTest::gtest_main)

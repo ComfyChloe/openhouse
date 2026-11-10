@@ -63,6 +63,25 @@ inline const char* RejectReasonName(int reason) {
   }
 }
 
+// How a refused correction should be printed: the scale out of the filter's own units
+// and the unit's name. Rotation and tilt are radians in the filter, an alternate base's
+// position is metres, gravity magnitude is m/s^2 and the angular rate is rad/s.
+struct RejectUnits {
+  double scale;
+  const char* unit;
+};
+inline RejectUnits RejectUnitsFor(int reason) {
+  switch (reason) {
+    case kRejectImuRot:
+    case kRejectGravTilt:
+    case kRejectAltBaseRot: return {57.29577951308232, "deg"};  // rad -> deg
+    case kRejectAltBaseTrans: return {100.0, "cm"};             // m -> cm
+    case kRejectGravMag: return {1.0, "m/s2"};
+    case kRejectOmega: return {1.0, "rad/s"};
+    default: return {1.0, ""};
+  }
+}
+
 class DirectFilter {
  public:
   DirectFilter();
