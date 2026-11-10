@@ -315,6 +315,7 @@ class StockHmd::DeviceProxy : public ITrackedDeviceServerDriver {
   void EnterStandby() override { inner_->EnterStandby(); }
   void* GetComponent(const char* name) override { return inner_->GetComponent(name); }
   void DebugRequest(const char* request, char* response, uint32_t size) override {
+    if (owner_->requestHandler_ && owner_->requestHandler_(request, response, size)) return;
     inner_->DebugRequest(request, response, size);
   }
   DriverPose_t GetPose() override { return inner_->GetPose(); }

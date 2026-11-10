@@ -218,6 +218,23 @@ learning pipeline; this change does not expire or remove them.
 
 Windows build feasibility and missing cross-dependencies: `windows_build.md`.
 
+## Base station power
+
+vrmonitor wakes and sleeps the base stations over Bluetooth, through the serial port of
+a headset's built-in receiver, but first asks the headset's driver to switch that
+receiver's radio, with `IVRDebug::DriverDebugRequest(0, ...)`: `set_radio_mode_ble` /
+`set_radio_mode_valve` answer `1` or `0`, `get_radio_mode` answers `B`, `V` or `0`. A
+failed first switch makes vrmonitor give up for the whole session, so the stations
+neither wake when SteamVR starts nor sleep when it closes.
+
+In the hybrid setup these requests reach the stock driver through the headset's proxy
+(`stock_hmd.hpp`), and it can't serve them: it never sees the receivers. So
+`StockHmd::SetRequestHandler` lets ours answer first (`Provider::RadioRequest`, as stock
+`0x1eaa9` in the Windows DLL, 2.19.2); anything else still goes to the stock driver. The
+commands run on the thread that owns the receiver, like pairing
+(`UsbTransport::TakeRadioCommands`). Reports, and which receiver: `usb/radio_mode.hpp`.
+Checked on a Bigscreen Beyond's receivers.
+
 ## Tracking quality
 
 What the runtime adds over the stock filter (acquisition on few sensors and through

@@ -204,6 +204,9 @@ class SessionImpl final : public Session, public InputSinkBase {
   bool SetPairing(const std::string& receiver, double seconds) override {
     return usb_ && usb_->SetPairing(receiver, int(std::lround(seconds * 1000)));
   }
+  bool HasBluetoothRadio() const override { return usb_ && usb_->HasBluetoothReceiver(); }
+  bool SetBluetoothRadio(bool on) override { return usb_ && usb_->SetBluetoothRadio(on); }
+  std::optional<bool> BluetoothRadioOn() override { return usb_ ? usb_->BluetoothRadioOn() : std::nullopt; }
   bool Haptic(const std::string& serial, double frequency, double amplitude, double duration) override;
   bool PowerOff(const std::string& serial) override;
   bool SaveRoom(std::string* error) override;

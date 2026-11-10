@@ -129,6 +129,16 @@ bool DirectFilter::RejectCorrection(const Vec& dx) {
   // Same limits, same order of test: only the reason is recorded (see RejectReason).
   const auto refuse = [this](int reason) {
     lastRejectReason = reason;
+    lastRejectSlot = -1;
+    lastRejectOver = lastRejectLimit = 0;
+    return true;
+  };
+  // An alternate base's limit: record which base slot tripped it and by how much.
+  const auto refuseAlt = [this](int reason, int slot, double over, double limit) {
+    lastRejectReason = reason;
+    lastRejectSlot = slot;
+    lastRejectOver = over;
+    lastRejectLimit = limit;
     return true;
   };
   for (int i = 0; i < dx.size(); i++)
@@ -155,9 +165,9 @@ bool DirectFilter::RejectCorrection(const Vec& dx) {
     if (!altBaseActive[s]) continue;
     const int k = kAltBaseIndex[s];
     const double trans = std::sqrt(d(k + 2) * d(k + 2) + d(k) * d(k) + d(k + 1) * d(k + 1));
-    if (kMaxAltBaseTrans < trans) return refuse(kRejectAltBaseTrans);
+    if (kMaxAltBaseTrans < trans) return refuseAlt(kRejectAltBaseTrans, s, trans, kMaxAltBaseTrans);
     const double rotAlt = std::sqrt(d(k + 5) * d(k + 5) + d(k + 3) * d(k + 3) + d(k + 4) * d(k + 4));
-    if (kMaxAltBaseRot < rotAlt) return refuse(kRejectAltBaseRot);
+    if (kMaxAltBaseRot < rotAlt) return refuseAlt(kRejectAltBaseRot, s, rotAlt, kMaxAltBaseRot);
   }
   lastRejectReason = kRejectNone;
   return false;
