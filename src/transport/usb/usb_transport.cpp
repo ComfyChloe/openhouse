@@ -44,6 +44,11 @@ constexpr double kRadioGap = 1.0;  // s
 constexpr double kDeviceCheck = 3.0, kDeviceRecheck = 0.25;  // s
 
 constexpr uint16_t kValveVid = 0x28de;
+// LH_RECEIVER_KEEPALIVE=always: the previous behaviour, a keepalive to every idle receiver on
+// every probe pass. A quiet receiver only needs one when a pairing starts (TakePairing); sent
+// continuously it keeps an idle receiver's radio awake - seven radios at once on a Tundra SW7,
+// which then runs hot for as long as the driver is loaded.
+const bool kKeepAliveEveryPass = std::getenv("LH_RECEIVER_KEEPALIVE") != nullptr;
 
 double HostNow() {
   using namespace std::chrono;
@@ -616,8 +621,12 @@ void UsbTransport::KeepAlive(Open& o) {
   // and did with lighthouse_console, which sends this to a quiet dongle (as stock does).
   const auto report = ReceiverKeepaliveReport();
   const int sent = hid_send_feature_report(o.dev, report.data(), report.size()) == int(report.size()) ? 1 : 0;
+  // INFO when the result changes, DEBUG for every send: how often this goes out is what keeps an
+  // idle receiver's radio awake (seven times over on a Tundra SW7, which then runs hot).
   if (sent != o.keepalive)
     Log(LogLevel::Info, "receiver %s: keepalive %s\n", o.receiver.c_str(), sent ? "sent" : "failed");
+  else
+    Log(LogLevel::Debug, "receiver %s: keepalive %s\n", o.receiver.c_str(), sent ? "sent" : "failed");
   o.keepalive = sent;
 }
 
@@ -631,6 +640,10 @@ bool UsbTransport::TakePairing(Open& o) {
     command = *it;
     pairing_.erase(it);
   }
+  // A quiet receiver takes the keepalive before a pairing command: lighthouse_console sends it,
+  // and without it a VIVE Tracker 2018 would not pair (2026-11-12). This is where the stock
+  // driver triggers it, rather than on every probe pass.
+  KeepAlive(o);
   std::array<uint8_t, 64> report{};
   report[0] = 0xff;
   report[1] = 0xad;
@@ -746,7 +759,7 @@ void UsbTransport::ProbeMain() {
       serve();
       Open& o = idle_[i];
       if (o.bluetooth) { ++i; continue; }  // nothing can connect to it for now
-      KeepAlive(o);
+      if (kKeepAliveEveryPass) KeepAlive(o);   // the stock keepalive is triggered, not periodic
       DeviceInfo di;
       if (!QueryDeviceInfo(o.dev, &di, 2) || di.serial == 0) { ++i; continue; }
       char sn[16];

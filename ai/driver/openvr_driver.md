@@ -136,6 +136,25 @@ Calibrating_InProgress / Uninitialized.
   ~0.3 s with three idle dongles.
 * A probe thread watches those receivers and attaches devices that connect later
   ("connected to receiver"), as the stock driver does.
+* **The receiver keepalive is triggered, not periodic (2026-11-21).** It used to go to every
+  idle receiver on every probe pass, which keeps an idle receiver's radio awake: on a Tundra
+  SW7 — seven `28de:2102` receivers in one box, USB serials `<serial>-<n>YX` — that is seven
+  radios awake for as long as the driver is loaded. Measured with
+  `lhtool stats live 15` and `LH_LOG_LEVEL=DEBUG` on 3× `28de:2101` plus the SW7's 7×
+  `28de:2102`: **38 keepalives in 15 s before, 0 after**, with the device-info polling (how a
+  device that connects later is noticed) unchanged. It is now sent from `TakePairing`,
+  immediately before the pairing command, which is where the 2018 needed it.
+  `LH_RECEIVER_KEEPALIVE=1` restores the old every-pass behaviour for A/B.
+  **This is not a thermal fix, and must not be sold as one.** The reporter's SW7 stayed hot
+  after it, so the heat is most likely the dongle's own firmware holding seven radios in RX;
+  do not infer a temperature from a traffic count.
+* **A Tundra SW7 presents seven receivers, not one:** `28de:2102`, USB serial `<serial>-<n>YX`
+  for n 1-7, each answering the config read (0x10/0x11) in ~150 ms. `usb_protocol.md`'s
+  "nothing" for 0x2102 describes *stream* reports only.
+* **`back-facing hits` plus `no optical samples` is a room problem, not a driver one.** On the
+  same machine Valve's stock `lighthouse 2.18.4` reproduced it identically (71k back-facing
+  hits, resets every ~3 s, "Moving the base for tracking too"), with a base calibrated at
+  138-146 deg pitch. Check the stock driver before attributing it to us.
 * **Receiver hotplug (2026-10-19).** The probe thread re-enumerates HID once a second
   and opens any receiver/HMD interface it doesn't have open. An unplugged interface
   (read error) is closed, detached and forgotten, so plugging it back in opens it
