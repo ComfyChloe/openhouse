@@ -416,6 +416,7 @@ if(LH_BUILD_TESTS)
     tests/unit/test_platform.cpp
     tests/unit/test_version.cpp
     tests/unit/test_tracker_names.cpp
+    tests/unit/test_doorman_home_channels.cpp
     tests/unit/test_tracking_source.cpp
     tests/unit/test_pose_solver.cpp
     tests/unit/test_tracker.cpp

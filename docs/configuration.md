@@ -46,6 +46,7 @@ openhouse-overlay's Settings page changes it for you, but you can also edit it b
 | `predictWithAcceleration` | Helps SteamVR predict where your controllers will be during fast motion. On by default |
 | `useSteamVRRooms` | See [below](#use-steamvrs-rooms). On by default |
 | `mixedLight` | Mixed 1.0 and 2.0 base stations, off by default. `"mixedLight": true` is enough to turn it on. See [Base stations](basestations.md#mixed-10-and-20-base-stations-experimental) |
+| `doormanHomeChannels` | Doorman Dongles: the radio channels each dongle may hop on, by its USB serial (its name without `OHDG-`), as a mask of the 16 channels in quotes, starting with `0x`. For two dongles side by side, for example `{ "0123456789ABCDEF": "0x00FF", "FEDCBA9876543210": "0xFF00" }`. At least 8 channels. The dongle forgets them when it restarts, so openhouse sends them each time it opens the dongle. Needs dongle firmware with home channels. Leave it out to keep all 16. To go back to all 16, set that dongle's mask to `"0xFFFF"` and restart SteamVR, or remove it, restart SteamVR and replug the dongle (it keeps its home until it restarts) |
 
 ## Use SteamVR's rooms
 `useSteamVRRooms` (**Use SteamVR's rooms** in openhouse-overlay, SteamVR only) keeps openhouse in step with SteamVR's own room files, so Room Setup isn't asked for on every start.

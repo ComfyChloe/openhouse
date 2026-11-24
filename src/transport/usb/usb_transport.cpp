@@ -577,6 +577,10 @@ void UsbTransport::PumpDoorman(double now) {
         auto dongle = std::make_shared<DoormanDongle>(
             f.serial, sink_, &decoder_, &capture_, &nextEp_, opts_.steamLighthouseConfigDir,
             [this](LogLevel level, const std::string& text) { Log(level, "%s\n", text.c_str()); }, &doormanCarriers_);
+        std::string usbSerial = f.serial.substr(std::min<size_t>(f.serial.size(), 5));   // "OHDG-" + USB serial
+        for (char& c : usbSerial) c = char(std::toupper(static_cast<unsigned char>(c)));
+        if (const auto home = opts_.doormanHomeChannels.find(usbSerial); home != opts_.doormanHomeChannels.end())
+          dongle->SetHomeChannels(home->second);
         const auto bySerial = [](const auto& a, const auto& b) { return a->Serial() < b->Serial(); };
         dongles.insert(std::upper_bound(dongles.begin(), dongles.end(), dongle, bySerial), dongle);
         std::lock_guard lock(doormanMutex_);

@@ -111,6 +111,11 @@ class DoormanDongle {
   // The user's name for a slot's device, kept on the dongle (firmware 0x0025+, cmd 0x34). Any
   // thread; false if the dongle isn't open.
   bool SetName(int slot, const std::string& name);
+  // The hop channels this dongle may use (cmd 0x36; bit k = hop channel k, 0xFFFF = all 16), from the
+  // user's settings. The dongle keeps them in RAM only, so they're sent each time it is opened (a
+  // replugged or restarted dongle starts on all 16). Fewer than 8 channels: never sent (the dongle
+  // refuses them). Not called: nothing is sent. Reader thread.
+  void SetHomeChannels(uint16_t mask);
   const std::string& Serial() const { return serial_; }   // any thread; also while it isn't open
   std::vector<DeviceId> Connected() const;
   // The device was reported gone: its slot shows none until the next stats refresh says otherwise.
@@ -232,6 +237,11 @@ class DoormanDongle {
   int pairSlot_ = -1;
   std::vector<EndpointInfo> eps_;
   std::vector<SlotStat> statsCache_;   // under mutex_
+  // Home channels (SetHomeChannels), reader thread: sent once per open; homeSeq_: the request whose
+  // reply is due. Firmware without cmd 0x36 is reported once, not on every open.
+  std::optional<uint16_t> home_;
+  bool homeSent_ = false, homeUnknownLogged_ = false;
+  int homeSeq_ = -1;
 };
 
 }  // namespace lh::usb

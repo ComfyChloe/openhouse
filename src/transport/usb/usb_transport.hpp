@@ -46,6 +46,9 @@ struct UsbTransportOptions {
   // Called on the reader thread after dispatch. Never called with a transport lock held.
   std::function<void(const DeviceCommandResult&)> onCommandResult;
   bool fetchConfigIfMissing = true;      // feature 0x10/0x11 + zlib; cache remains preferred
+  // Doorman Dongles' home channels (DoormanDongle::SetHomeChannels), by USB serial in upper case
+  // (the receiver name without "OHDG-"). A dongle not listed: nothing is sent.
+  std::map<std::string, uint16_t> doormanHomeChannels;
 };
 
 // Decodes a stream of raw reports (live or from a capture) into an IInputSink.
