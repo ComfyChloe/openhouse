@@ -38,6 +38,16 @@ Source of truth: `doorman/common/doorman_link.h` (air format, constants) and
     hopping on the old one, so while a slot misses polls the dongle polls it where that rule puts it,
     from what it sent in the device's last two answered POLLs (in turn with the cycle's own channel,
     within 1 s). Without it, such a device was lost for up to ~1 s, or rejoined. Cmd 0x32.
+  * Home (cmd 0x36, RAM only, default all 16): the channels a dongle may hop on, at least 8.
+    Every dongle steps through its channels in the same order, so two dongles side by side whose
+    cycles drift slowly against each other sit on the same channel for many cycles in a row and
+    lose polls in runs. On disjoint homes (0x00FF / 0xFF00) they never hop on the same channel
+    (the join channel, 2480 MHz, stays shared). Devices follow it through the mask (any radio).
+    Adaptive hopping works inside the home: a new home starts with all its channels on and a fresh
+    2 s round; it keeps 4 on, and goes down to 3 for a channel losing at least twice the typical
+    loss (the lower median there), so in practice to 3 unless every channel is lossy. Back to all
+    16: at least 8 on at once; strikes and time-outs carry over. A dongle never leaves its home,
+    so pick homes from channels that are clean where the dongles are.
 * Reliability:
   * Uplink: go-back-N, window 2, 3-bit seq; the POLL carries the ack.
   * Downlink: alternating bit (dseq/dack).
@@ -145,6 +155,7 @@ and `doorman_link.py`. Older two-interface firmware isn't supported.
 | 0x33 | rejoin `[slot]`: the slot is not polled for 1.2 s, so its radio rejoins (status 2: not paired). The host sends it when a connected device has sent nothing for 6 s |
 | 0x34 | set a slot's name `[slot][len][UTF-8, up to 59 B]`, len 0 clears (status 2: not paired or too long). Kept in flash with the pairings; forgetting or re-pairing the slot clears it |
 | 0x35 | a slot's name `[slot]` -> `[len][UTF-8]` |
+| 0x36 | home `[lo][hi]` (0 only reads; 0xFFFF = all 16, the default; fewer than 8 channels: status 2, nothing changed): home u16, mask in use u16, channels kept on, fewest for a clearly bad channel. RAM only: a replug or restart clears it. Older firmware: status 1 |
 | 0x29 | live `[first]` (6 slots per reply, as 0x25): per slot `[used\|active<<1][rssi last rx][rssi last tx][min][max][channel][ms since reply u32]`. Min/max reset on read |
 | 0x2A | identity: the slot's last `H` frame (16 B, zeros if none) |
 
