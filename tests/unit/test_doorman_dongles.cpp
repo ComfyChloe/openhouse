@@ -578,6 +578,120 @@ TEST_F(Doorman, PairingNamesTheWholeDongleSerial) {
   EXPECT_EQ(Sent("Q0", 0x24), 1u);
 }
 
+// Home channels (cmd 0x36 [lo][hi]) sent on an interface, in order, over every handle it had (replugs too).
+// (These tests write inline, from the test's own thread.)
+std::vector<uint16_t> Homes(const std::string& path) {
+  std::vector<uint16_t> out;
+  for (const auto& h : fake::handles)
+    if (h->path == path)
+      for (const auto& w : h->written)
+        if (w.size() > 4 && w[1] == 0x36) out.push_back(uint16_t(w[3] | w[4] << 8));
+  return out;
+}
+// The dongle's reply to the last 0x36 on the open handle of `path`: [0x36][seq][status][home lo][home hi].
+std::vector<uint8_t> HomeReply(const std::string& path, uint8_t status) {
+  std::vector<uint8_t> r(63);
+  const fake::Handle* h = fake::Open(path);
+  if (h)
+    for (auto w = h->written.rbegin(); w != h->written.rend(); ++w)
+      if (w->size() > 4 && (*w)[1] == 0x36) { r[1] = (*w)[2]; r[3] = (*w)[3]; r[4] = (*w)[4]; break; }
+  r[0] = 0x36;
+  r[2] = status;
+  return r;
+}
+using Masks = std::vector<uint16_t>;
+
+// The settings' home channels (UsbTransportOptions::doormanHomeChannels) for the dongles of a new transport.
+class DoormanHomes : public Doorman {
+ protected:
+  void UseHomes(std::map<std::string, uint16_t> homes) {
+    transport->Stop();
+    lh::usb::UsbTransportOptions options;
+    options.steamLighthouseConfigDir = configs.string();
+    options.doormanHomeChannels = std::move(homes);
+    transport = std::make_unique<lh::usb::UsbTransport>(&sink, options);
+    sink.transport = transport.get();
+  }
+  void Replug(const std::string& name, const std::wstring& serial) {
+    fake::Unplug(name);
+    Step();
+    Step();
+    Plug(name, serial);
+    for (int i = 0; i < 8 && !fake::Open(name + "0"); ++i) Step();   // at most one open attempt every 2 s
+    ASSERT_NE(fake::Open(name + "0"), nullptr);
+  }
+};
+
+// The dongle keeps its home in RAM only: it's sent each time the dongle is opened, and only to the
+// dongle it's set for.
+TEST_F(DoormanHomes, SentWhenTheDongleOpensAndAgainAfterAReplug) {
+  UseHomes({{"TESTA", 0x00FF}});
+  Plug("A", L"TESTA");
+  Plug("B", L"TESTB");
+  Step();
+  EXPECT_EQ(Homes("A0"), (Masks{0x00FF}));
+  EXPECT_EQ(sink.Count("Doorman Dongle OHDG-TESTA: setting its home channels to 0x00FF (from the settings)"), 1u);
+  Queue("A0", HomeReply("A0", 0));
+  Step();
+  Step();
+  EXPECT_EQ(sink.Count("Doorman Dongle OHDG-TESTA hops on home channels 0x00FF"), 1u);
+  EXPECT_EQ(Homes("A0"), (Masks{0x00FF}));   // once per open, not on every pass
+
+  Replug("A", L"TESTA");   // replugged (or restarted): back on all 16, so it's sent again
+  Step();
+  EXPECT_EQ(Homes("A0"), (Masks{0x00FF, 0x00FF}));
+  EXPECT_EQ(sink.Count("Doorman Dongle OHDG-TESTA: setting its home channels to 0x00FF (from the settings)"), 2u);
+  EXPECT_EQ(Sent("B0", 0x36), 0u);   // B isn't in the settings
+}
+
+TEST_F(Doorman, WithoutTheSettingNoHomeChannelsAreSent) {
+  Plug("A", L"TESTA");
+  Step();
+  Connect("A", 0, kA1, 0b1);
+  Step();
+  EXPECT_EQ(Sent("A0", 0x36), 0u);
+  EXPECT_EQ(sink.CountContaining("home channels"), 0u);
+}
+
+// The dongle refuses a home of fewer than 8 channels: such a setting is reported once and never sent.
+TEST_F(DoormanHomes, FewerThanEightChannelsAreNotSent) {
+  UseHomes({{"TESTA", 0x000F}, {"TESTB", 0x0000}, {"TESTC", 0x7F00}});
+  Plug("A", L"TESTA");
+  Plug("B", L"TESTB");
+  Plug("C", L"TESTC");
+  Step();
+  Step();
+  Replug("A", L"TESTA");
+  Step();
+  EXPECT_EQ(Sent("A0", 0x36) + Sent("B0", 0x36) + Sent("C0", 0x36), 0u);
+  EXPECT_EQ(sink.Count("Doorman Dongle OHDG-TESTA: home channels 0x000F in the settings are fewer than 8 channels; "
+                       "not sent (it keeps its own)"), 1u);
+  EXPECT_EQ(sink.Count("Doorman Dongle OHDG-TESTB: home channels 0x0000 in the settings are fewer than 8 channels; "
+                       "not sent (it keeps its own)"), 1u);
+  EXPECT_EQ(sink.Count("Doorman Dongle OHDG-TESTC: home channels 0x7F00 in the settings are fewer than 8 channels; "
+                       "not sent (it keeps its own)"), 1u);
+}
+
+// Dongle firmware from before cmd 0x36 answers "unknown command": said once, and not asked again
+// until the dongle is opened again.
+TEST_F(DoormanHomes, FirmwareWithoutHomeChannelsIsReportedOnce) {
+  UseHomes({{"TESTA", 0xFF00}});
+  Plug("A", L"TESTA");
+  Step();
+  Queue("A0", HomeReply("A0", 1));
+  for (int i = 0; i < 5; ++i) Step();
+  const std::string unknown = "Doorman Dongle OHDG-TESTA: its firmware has no home channels (cmd 0x36); it hops on all 16";
+  EXPECT_EQ(sink.Count(unknown), 1u);
+  EXPECT_EQ(Homes("A0"), (Masks{0xFF00}));   // no retry
+  Replug("A", L"TESTA");
+  Step();
+  Queue("A0", HomeReply("A0", 1));
+  for (int i = 0; i < 5; ++i) Step();
+  EXPECT_EQ(Homes("A0"), (Masks{0xFF00, 0xFF00}));   // once per open (it may have been updated meanwhile)
+  EXPECT_EQ(sink.Count(unknown), 1u);
+  EXPECT_EQ(sink.CountContaining("hops on home channels"), 0u);
+}
+
 TEST_F(Doorman, SplitFramesStayWithTheirDongle) {
   Plug("A", L"TESTA");
   Plug("B", L"TESTB");

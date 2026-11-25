@@ -3,11 +3,13 @@
 #include <hidapi/hidapi.h>
 
 #include <algorithm>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <utility>
 
 #include "device_config.hpp"
 #include "platform/platform.hpp"
@@ -22,7 +24,8 @@ constexpr uint16_t kVid = 0x6767, kPid = 0x0727;
 constexpr double kExtraLatency = 0.0015;
 constexpr double kFeatureTimeout = 0.15;
 
-constexpr uint8_t kCmdRejoin = 0x33, kCmdSetName = 0x34, kCmdGetName = 0x35;
+constexpr uint8_t kCmdRejoin = 0x33, kCmdSetName = 0x34, kCmdGetName = 0x35, kCmdHome = 0x36;
+constexpr int kHomeMinChannels = 8;   // the smallest home the dongle takes (link.c HOME_MIN_SIZE)
 constexpr size_t kNameMax = 59;   // what the dongle keeps (link.c DML_NAME_MAX)
 constexpr uint8_t kCmdDown = 0x21, kCmdStats = 0x23, kCmdPair = 0x24, kCmdSlots = 0x25, kCmdLive = 0x29, kCmdIdent = 0x2A;
 
@@ -170,6 +173,8 @@ void DoormanDongle::StopWriter() {
 
 void DoormanDongle::Drop() {
   if (!dev_) return;
+  homeSent_ = false;   // the dongle forgets its home when it restarts: sent again when it's back
+  homeSeq_ = -1;
   StopWriter();
   // Each slot is forgotten as when its device turns off: plugged back in, the dongle's devices are
   // identified and attached again. Keeping the serial meant nothing re-attached them (listed in
@@ -235,6 +240,16 @@ void DoormanDongle::Downlink(int slot, const uint8_t* frame, size_t n) {
 void DoormanDongle::Pump(double now) {
   if (!dev_) return;   // the transport opens it again when it's listed again
   if (writeFailed_) { Drop(); return; }   // unplugged: the writer saw it first
+
+  if (home_ && !homeSent_) {           // once per open: the dongle keeps its home in RAM only
+    homeSent_ = true;
+    const uint8_t a[2] = {uint8_t(*home_), uint8_t(*home_ >> 8)};
+    Send(kCmdHome, a, 2);
+    homeSeq_ = seq_;
+    char b[96];
+    std::snprintf(b, sizeof b, ": setting its home channels to 0x%04X (from the settings)", unsigned(*home_));
+    log_(LogLevel::Info, "Doorman Dongle " + serial_ + b);
+  }
   if (now >= nextLive_) {
     nextLive_ = now + 0.25;
     for (int page = 0; page < 2; ++page) {   // 6 slots per reply
@@ -400,6 +415,19 @@ void DoormanDongle::Pump(double now) {
     if (!drain(d)) { Drop(); return; }
 }
 
+void DoormanDongle::SetHomeChannels(uint16_t mask) {
+  if (std::popcount(mask) < kHomeMinChannels) {
+    char b[160];
+    std::snprintf(b, sizeof b, ": home channels 0x%04X in the settings are fewer than %d channels; not sent (it keeps "
+                  "its own)", unsigned(mask), kHomeMinChannels);
+    log_(LogLevel::Warn, "Doorman Dongle " + serial_ + b);
+    home_.reset();
+    return;
+  }
+  home_ = mask;
+  homeSent_ = false;   // also when it's open already: sent with the next pass
+}
+
 void DoormanDongle::OnReport(double t, const uint8_t* r, int n, bool last) {
   if (n < 3) return;
   if (r[0] == 0x80 || r[0] == 0x81) {
@@ -473,6 +501,20 @@ void DoormanDongle::OnReport(double t, const uint8_t* r, int n, bool last) {
     std::copy(std::begin(v), std::end(v), s.raw.begin());
     s.polls = v[0]; s.respOk = v[1]; s.framesUp = v[5]; s.bytesUp = v[6]; s.drops = v[7];
     s.rssiD = -std::abs(int32_t(v[10])); s.rssiT = -std::abs(int32_t(v[11]));   // dongle keeps magnitudes
+  } else if (r[0] == kCmdHome && homeSeq_ >= 0 && r[1] == homeSeq_) {
+    homeSeq_ = -1;
+    char b[160];
+    if (r[2] == 0 && n >= 5) {
+      std::snprintf(b, sizeof b, " hops on home channels 0x%04X", unsigned(d[0] | d[1] << 8));
+      log_(LogLevel::Info, "Doorman Dongle " + serial_ + b);
+    } else if (r[2] == 1) {   // older firmware: not a command it knows. Said once, not on every open
+      if (!std::exchange(homeUnknownLogged_, true))
+        log_(LogLevel::Warn, "Doorman Dongle " + serial_ + ": its firmware has no home channels (cmd 0x36); it hops on "
+                                                           "all 16");
+    } else {
+      std::snprintf(b, sizeof b, ": home channels 0x%04X refused (status %d)", unsigned(home_.value_or(0)), int(r[2]));
+      log_(LogLevel::Warn, "Doorman Dongle " + serial_ + b);
+    }
   } else if (r[0] == kCmdGetName) {
     for (auto& s : slots_) {
       if (s.nameSeq != r[1]) continue;

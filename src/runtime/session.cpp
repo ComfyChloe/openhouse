@@ -23,6 +23,7 @@
 
 #include "device_role.hpp"
 #include "device_tracker.hpp"
+#include "doorman_home_channels.hpp"
 #include "index_input.hpp"
 #include "lh/input_sink.hpp"
 #include "mixed_light.hpp"
@@ -377,6 +378,7 @@ class SessionImpl final : public Session, public InputSinkBase {
   double smoothPosition_ = DeviceTracker::kDefaultSmoothing, smoothRotation_ = DeviceTracker::kDefaultSmoothing;
   bool reportAcceleration_ = true;
   std::map<std::string, std::string> roles_;  // settings.json "roles": serial -> tracked_controller_role
+  std::map<std::string, uint16_t> doormanHomes_;  // settings.json "doormanHomeChannels", for the transport
   bool persist_ = false;
   MixedLightOptions mixed_;  // SetMixedLight
   runtime::RotorReference rotorReference_;  // MixedLightOptions::rotorReference
@@ -480,6 +482,7 @@ bool SessionImpl::Start(std::string* error) {
     usb::UsbTransportOptions o;
     o.steamLighthouseConfigDir = options_.steamConfigDir;
     o.capturePath = options_.capturePath;
+    o.doormanHomeChannels = doormanHomes_;
     o.onCommandResult = [this](const usb::DeviceCommandResult& result) {
       // A power-off is rare and worth seeing in the host log whatever happened to it.
       const bool routine = std::string(result.status) == "written" && !result.powerOff;
@@ -1769,6 +1772,11 @@ void SessionImpl::LoadSettings() {
   if (!in) return;
   try {
     const json j = json::parse(in);
+    {   // first, and without a throw: a mistake elsewhere in the file doesn't take these with it
+      std::vector<std::string> problems;
+      doormanHomes_ = DoormanHomeChannels(j, &problems);
+      for (const auto& p : problems) Emit(SessionEventType::Log, "", "settings " + settingsPath_ + ": " + p);
+    }
     if (j.contains("controllers")) {
       const auto& controllers = j.at("controllers");
       if (!controllers.is_object()) throw std::runtime_error("controllers must be an object");
