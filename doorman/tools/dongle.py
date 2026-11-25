@@ -8,6 +8,8 @@
   dongle.py stats | link on|off | listen [SECS]   tracker link counters / frame rates
   dongle.py signal [SECS [SLOT]]     signal strength both ways + where polls get lost
   dongle.py slots | pair [SECS [SLOT [any]]] | forget SLOT|all | channels | slotstats SLOT
+  dongle.py home [MASK]              hop channels of its own (0x00FF / 0xFF00 for two side by side;
+                                     0xFFFF = all 16; at least 8 channels; RAM only, a replug clears it)
   dongle.py crash-test 1             deliberate HardFault (tests the crash record)
   dongle.py bank-update [DIR]        update over USB: write the bank it isn't running from
                                      DIR/doorman_dongle_<board>_a.bin / _b.bin, restart into it
@@ -216,6 +218,11 @@ def main():
         print("pairing open" + (f" for slot {slot}" if slot >= 0 else "") + (", any unknown device" if anyd else ""))
     elif c == "forget": cmd(open_dev(), 0x26, bytes([0xFF if len(a) < 2 or a[1] == "all" else int(a[1])])); slots()
     elif c == "channels": channels()
+    elif c == "home":
+        st, d = cmd(open_dev(), 0x36, struct.pack("<H", int(a[1], 0) if len(a) > 1 else 0))
+        if st: sys.exit("refused: a home needs at least 8 channels" if st == 2 else "this dongle firmware has no home channels (cmd 0x36)")
+        home, mask = struct.unpack_from("<2H", d)
+        print(f"home 0x{home:04X}, mask in use 0x{mask:04X}, keeps {d[4]} on (down to {d[5]} for a clearly bad one)")
     elif c == "codec":
         h = open_dev(); slot = int(a[1]) if len(a) > 1 else 0
         a0, b0, _ = struct.unpack_from("<3I", cmd(h, 0x28, bytes([slot]))[1]); time.sleep(3)

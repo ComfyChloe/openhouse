@@ -79,6 +79,12 @@ static uint32_t net_base;
 static uint8_t cycle;
 static uint16_t mask = 0xFFFF, next_mask = 0xFFFF;
 static uint8_t cur_ch;
+/* Home (cmd 0x36): the channels this dongle may hop on at all, default all 16. Two dongles side by side hop
+   over the same channels in the same order, so whenever their cycles line up they collide for many cycles in
+   a row; on disjoint homes (0x00FF / 0xFF00) they never share a channel. Devices follow it through the mask
+   like any mask change. RAM only: the host sets it. */
+static uint16_t home = 0xFFFF;
+static uint8_t home_set;                   /* a new home, taken at the next cycle start */
 
 /* per hop channel loss statistics (for adaptive hopping) */
 static struct { uint16_t polls, lost; uint32_t off_until_ms; uint8_t loss_pct, strikes; } chs[DML_NHOP];
@@ -463,10 +469,24 @@ static void join_beacon(void)
  * is busy (Wi-Fi): dropping in frequency order kept the worst ones once the minimum was reached. */
 #define CH_MIN_ON   8
 #define CH_BAD_PCT  8
+/* Inside a home (not all 16; at least HOME_MIN_SIZE channels, cmd 0x36) the floor of 8 would hold every channel
+   of an 8-channel home, Wi-Fi hit or not. There, HOME_KEEP channels stay on, and a channel losing clearly more than
+   the rest (bad, and at least twice the typical loss) may take it down to HOME_MIN. While the typical loss is
+   under 8 %, every bad channel is also clearly bad, so the floor is then HOME_MIN. All 16: CH_MIN_ON as before. */
+#define HOME_KEEP   4
+#define HOME_MIN    3
+#define HOME_MIN_SIZE 8                   /* the smallest home cmd 0x36 takes */
+static void home_floors(int *keep, int *least)
+{
+  if (home == 0xFFFF) { *keep = *least = CH_MIN_ON; return; }
+  *keep = HOME_KEEP; *least = HOME_MIN;
+}
 /* A channel is bad when it loses clearly more than the channels around it. Loss a device has on
    every channel (weak signal, body in the way) is not the channel's fault: judged on absolute loss,
-   one weak device struck clean channels until only a few were left to hop on. */
-static uint8_t channels_typical_loss(uint16_t m)
+   one weak device struck clean channels until only a few were left to hop on.
+   low: the lower median. In a home, with 3-8 channels on, the upper one is often a bad channel itself
+   (8 on, 4 of them bad: nothing would ever drop). */
+static uint8_t channels_typical_loss(uint16_t m, int low)
 {
   uint8_t v[DML_NHOP]; int n = 0;
   for (int k = 0; k < DML_NHOP; k++)
@@ -475,29 +495,34 @@ static uint8_t channels_typical_loss(uint16_t m)
       while (i > 0 && v[i - 1] > x) { v[i] = v[i - 1]; i--; }
       v[i] = x;
     }
-  return n ? v[n / 2] : 0;
+  return n ? v[low ? (n - 1) / 2 : n / 2] : 0;
 }
 static void channels_eval(void)
 {
   if (ms_ticks - ch_eval_ms < 2000) return;
   ch_eval_ms = ms_ticks;
-  uint16_t m = mask;
-  int on = 0;
+  uint16_t m = mask & home;
+  if (!m) m = home;
+  const int in_home = home != 0xFFFF;
+  int on = 0, keep, least, home_first = 0;
+  home_floors(&keep, &least);
+  for (int k = DML_NHOP - 1; k >= 0; k--) if ((home >> k) & 1) home_first = k;
   for (int k = 0; k < DML_NHOP; k++) {
     chs[k].loss_pct = chs[k].polls ? (uint8_t)(100u * chs[k].lost / chs[k].polls) : 0;
     if ((m >> k) & 1) {
       on++;
-      if (chs[k].polls >= 20 && chs[k].loss_pct <= 2 + channels_typical_loss(m) && chs[k].strikes && ms_ticks - chs[k].off_until_ms > 120000)
+      if (chs[k].polls >= 20 && chs[k].loss_pct <= 2 + channels_typical_loss(m, in_home) && chs[k].strikes && ms_ticks - chs[k].off_until_ms > 120000)
         chs[k].strikes--;                                    /* clean for 2 min since it came back */
     }
   }
-  const unsigned bad = CH_BAD_PCT + channels_typical_loss(m);
+  const unsigned typical = channels_typical_loss(m, in_home), bad = CH_BAD_PCT + typical;
   for (;;) {                                                 /* drop the worst bad channel, again and again */
     int worst = -1;
     for (int k = 0; k < DML_NHOP; k++)
       if ((m >> k) & 1 && chs[k].polls >= 20 && chs[k].loss_pct > bad &&
           (worst < 0 || chs[k].loss_pct > chs[worst].loss_pct)) worst = k;
-    if (worst < 0 || on <= CH_MIN_ON) break;
+    if (worst < 0) break;
+    if (on <= keep && (on <= least || chs[worst].loss_pct < 2 * typical)) break;   /* below keep: clearly bad only */
     m &= (uint16_t)~(1u << worst); on--;
     uint32_t off = 30000u << (chs[worst].strikes < 4 ? chs[worst].strikes : 4);
     if (off > 300000u) off = 300000u;
@@ -506,9 +531,9 @@ static void channels_eval(void)
   }
   int back = -1;                                             /* one expired channel back per round */
   for (int k = 0; k < DML_NHOP; k++)
-    if (!((m >> k) & 1) && (int32_t)(ms_ticks - chs[k].off_until_ms) >= 0 &&
+    if (!((m >> k) & 1) && ((home >> k) & 1) && (int32_t)(ms_ticks - chs[k].off_until_ms) >= 0 &&
         (back < 0 || (int32_t)(chs[k].off_until_ms - chs[back].off_until_ms) < 0)) back = k;
-  if (back >= 0 || on == 0) { if (back < 0) back = 0; m |= (uint16_t)(1u << back); chs[back].off_until_ms = ms_ticks; }
+  if (back >= 0 || on == 0) { if (back < 0) back = home_first; m |= (uint16_t)(1u << back); chs[back].off_until_ms = ms_ticks; }
   for (int k = 0; k < DML_NHOP; k++) { chs[k].polls = 0; chs[k].lost = 0; }
   next_mask = m;
 }
@@ -569,6 +594,30 @@ void link_poll(void)
   mask = next_mask;
   cur_ch = dml_channel(cycle, mask);
   channels_eval();                                          /* sets next_mask (announced in this cycle) */
+  if (home_set && home == 0xFFFF) {    /* back to all 16: the channels that aren't timed out, at least CH_MIN_ON */
+    home_set = 0;
+    uint16_t m = home;
+    int on = DML_NHOP;
+    for (int c = 0; c < DML_NHOP; c++) if ((int32_t)(ms_ticks - chs[c].off_until_ms) < 0) { m &= (uint16_t)~(1u << c); on--; }
+    while (on < CH_MIN_ON) {                                /* the ones due back soonest */
+      int c1 = -1;
+      for (int c = 0; c < DML_NHOP; c++)
+        if (!((m >> c) & 1) && (c1 < 0 || (int32_t)(chs[c].off_until_ms - chs[c1].off_until_ms) < 0)) c1 = c;
+      m |= (uint16_t)(1u << c1); chs[c1].off_until_ms = ms_ticks; on++;
+    }
+    next_mask = m;
+  } else if (home_set) {
+    /* A new home is judged on its own: all its channels on and a fresh 2 s round. Time-outs from the whole
+       band would otherwise leave it on whatever survived them (3 of 8 seen) until they end; strikes stay, so
+       a channel dropped again stays off longer. */
+    home_set = 0;
+    for (int c = 0; c < DML_NHOP; c++) {
+      if ((home >> c) & 1) chs[c].off_until_ms = ms_ticks;
+      chs[c].polls = 0; chs[c].lost = 0;
+    }
+    ch_eval_ms = ms_ticks;
+    next_mask = home;
+  }
   int k = 0;
   uint32_t missed = 0;
   for (uint8_t i = 0; i < DML_SLOTS; i++) {
@@ -657,7 +706,7 @@ int link_stream_pop(uint8_t *rep, int itf)
 
 static void put32(uint8_t *p, uint32_t v) { memcpy(p, &v, 4); }
 
-int link_cmd(const uint8_t *in, uint8_t *d, uint8_t *st)    /* 0x20..0x2F, 0x32..0x35; d = 61 bytes */
+int link_cmd(const uint8_t *in, uint8_t *d, uint8_t *st)    /* 0x20..0x2F, 0x32..0x36; d = 61 bytes */
 {
   uint8_t i = in[2] < DML_SLOTS ? in[2] : 0;
   slot_t *s = &sl[i];
@@ -754,6 +803,16 @@ int link_cmd(const uint8_t *in, uint8_t *d, uint8_t *st)    /* 0x20..0x2F, 0x32.
     uint8_t n = 0;
     while (n < DML_NAME_MAX && name[n]) n++;
     d[0] = n; memcpy(d + 1, name, n); return 1;
+  }
+  case 0x36: {                                              /* home: [lo][hi], 0 only reads; 0xFFFF = all 16 */
+    const uint16_t h = (uint16_t)(in[2] | in[3] << 8);
+    int hn = 0;
+    for (int k = 0; k < DML_NHOP; k++) hn += (h >> k) & 1;
+    if (h && hn < HOME_MIN_SIZE) { *st = 2; return 1; }     /* fewer than 8 channels: refused, nothing changed */
+    if (h && h != home) { home = h; home_set = 1; }         /* taken at the next cycle start; the same home again: nothing */
+    int keep, least; home_floors(&keep, &least);
+    d[0] = (uint8_t)home; d[1] = (uint8_t)(home >> 8); d[2] = (uint8_t)mask; d[3] = (uint8_t)(mask >> 8);
+    d[4] = (uint8_t)keep; d[5] = (uint8_t)least; return 1;
   }
   case 0x27:                                                /* channels: mask, loss % per hop channel */
     d[0] = (uint8_t)mask; d[1] = (uint8_t)(mask >> 8);
