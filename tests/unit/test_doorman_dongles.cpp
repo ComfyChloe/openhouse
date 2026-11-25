@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <cstring>
 #include <deque>
@@ -14,8 +15,10 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 #include <hidapi/hidapi.h>
 
@@ -33,25 +36,46 @@ struct Handle {
   std::vector<std::vector<uint8_t>> written;
   bool gone = false, closed = false;
 };
+// Every fake call holds this: a dongle's open and writes can run on threads of their own.
+std::recursive_mutex m;
+std::condition_variable_any changed;
 std::vector<Interface> plugged;           // what hid_enumerate lists, in this order
 std::vector<hid_device_info> listed;      // the last enumeration
 std::vector<std::unique_ptr<Handle>> handles;
 std::function<void()> endPass;
+// Opening a path that starts with one of these hangs (a dongle that stopped answering, still
+// listed) until Release(), or for kHangCap at most: then every hang ends and it opens as usual.
+std::set<std::string> hangOpens;
+int hanging = 0;                          // opens waiting in a hang now
+constexpr auto kHangCap = std::chrono::seconds(3);
 
 void Reset() {
+  std::lock_guard lock(m);
   plugged.clear();
   listed.clear();
   handles.clear();
   endPass = {};
+  hangOpens.clear();
+}
+void Hang(const std::string& prefix) {
+  std::lock_guard lock(m);
+  hangOpens.insert(prefix);
+}
+void Release() {
+  std::lock_guard lock(m);
+  hangOpens.clear();
+  changed.notify_all();
 }
 // The open handle of an interface (the newest, after a replug).
 Handle* Open(const std::string& path) {
+  std::lock_guard lock(m);
   for (auto it = handles.rbegin(); it != handles.rend(); ++it)
     if ((*it)->path == path && !(*it)->closed) return it->get();
   return nullptr;
 }
 // Unplugged: gone from the list, and its open handles fail.
 void Unplug(const std::string& prefix) {
+  std::lock_guard lock(m);
   std::erase_if(plugged, [&](const Interface& i) { return i.path.rfind(prefix, 0) == 0; });
   for (auto& h : handles)
     if (h->path.rfind(prefix, 0) == 0) h->gone = true;
@@ -61,6 +85,7 @@ void Unplug(const std::string& prefix) {
 extern "C" {
 int HID_API_CALL hid_init() { return 0; }
 hid_device_info* HID_API_CALL hid_enumerate(unsigned short, unsigned short) {
+  std::lock_guard lock(fake::m);
   fake::listed.assign(fake::plugged.size(), hid_device_info{});
   for (size_t i = 0; i < fake::plugged.size(); ++i) {
     hid_device_info& d = fake::listed[i];
@@ -76,17 +101,31 @@ hid_device_info* HID_API_CALL hid_enumerate(unsigned short, unsigned short) {
 }
 void HID_API_CALL hid_free_enumeration(hid_device_info*) {}
 hid_device* HID_API_CALL hid_open_path(const char* path) {
+  std::unique_lock lock(fake::m);
+  const auto hangs = [&] {
+    return std::any_of(fake::hangOpens.begin(), fake::hangOpens.end(),
+                       [&](const std::string& p) { return std::string(path).rfind(p, 0) == 0; });
+  };
+  if (hangs()) {
+    ++fake::hanging;
+    if (!fake::changed.wait_for(lock, fake::kHangCap, [&] { return !hangs(); })) fake::hangOpens.clear();
+    --fake::hanging;
+  }
   const bool present = std::any_of(fake::plugged.begin(), fake::plugged.end(), [&](const auto& i) { return i.path == path; });
   if (!present) return nullptr;
   fake::handles.push_back(std::make_unique<fake::Handle>());
   fake::handles.back()->path = path;
   return reinterpret_cast<hid_device*>(fake::handles.back().get());
 }
-void HID_API_CALL hid_close(hid_device* d) { reinterpret_cast<fake::Handle*>(d)->closed = true; }
+void HID_API_CALL hid_close(hid_device* d) {
+  std::lock_guard lock(fake::m);
+  reinterpret_cast<fake::Handle*>(d)->closed = true;
+}
 int HID_API_CALL hid_set_nonblocking(hid_device*, int) { return 0; }
 int HID_API_CALL hid_send_feature_report(hid_device*, const unsigned char*, size_t) { return -1; }
 int HID_API_CALL hid_get_feature_report(hid_device*, unsigned char*, size_t) { return -1; }
 int HID_API_CALL hid_read(hid_device* d, unsigned char* data, size_t n) {
+  std::lock_guard lock(fake::m);
   auto* h = reinterpret_cast<fake::Handle*>(d);
   if (h->gone) return -1;
   if (h->input.empty()) {
@@ -104,6 +143,7 @@ int HID_API_CALL hid_read(hid_device* d, unsigned char* data, size_t n) {
   return int(count);
 }
 int HID_API_CALL hid_write(hid_device* d, const unsigned char* data, size_t n) {
+  std::lock_guard lock(fake::m);
   auto* h = reinterpret_cast<fake::Handle*>(d);
   if (h->gone) return -1;
   h->written.emplace_back(data, data + n);
@@ -177,6 +217,7 @@ std::vector<uint8_t> Imu(int slot, uint8_t mark) {   // 'p': one IMU sample (17 
 }
 // Host -> dongle commands on interface 0: [0][cmd][seq][args...].
 size_t Sent(const std::string& path, uint8_t cmd, std::function<bool(const std::vector<uint8_t>&)> match = {}) {
+  std::lock_guard lock(fake::m);
   size_t n = 0;
   for (const auto& h : fake::handles)
     if (h->path == path)
@@ -202,7 +243,7 @@ class Doorman : public testing::Test {
   double t = 0;
 
   void SetUp() override {
-    lh::usb::g_doormanInlineWrites = true;   // what was written is checked right after each pass
+    lh::usb::g_doormanInlineIo = true;   // what was opened and written is checked right after each pass
     fake::Reset();
     configs = fs::temp_directory_path() / ("lh-doorman-dongles-test-" + std::to_string(uint64_t(Now() * 1e6)));
     for (uint32_t id : {kA1, kA2, kB1}) {   // the fake Steam config cache: no config is read over the radio
@@ -235,6 +276,7 @@ class Doorman : public testing::Test {
     Access::Pump(*transport, t);
   }
   static void Queue(const std::string& path, std::vector<uint8_t> report) {
+    std::lock_guard lock(fake::m);
     fake::Handle* h = fake::Open(path);
     ASSERT_NE(h, nullptr) << path << " is not open";
     h->input.push_back(std::move(report));
@@ -785,4 +827,80 @@ TEST_F(Doorman, AZeroLengthFragmentWithNothingBufferedIsIgnored) {
   Step();
   Step();
   EXPECT_EQ(sink.Count(Serial(kA1) + ": connected on Doorman Dongle OHDG-TESTA slot 1"), 1u);
+}
+
+namespace {
+// Fake handles opened on paths starting with `prefix`.
+size_t HandlesOf(const std::string& prefix) {
+  std::lock_guard lock(fake::m);
+  return size_t(std::count_if(fake::handles.begin(), fake::handles.end(),
+                              [&](const auto& h) { return h->path.rfind(prefix, 0) == 0; }));
+}
+// Waits (up to 2 s) until `done`.
+bool WaitFor(const std::function<bool()>& done) {
+  for (int i = 0; i < 200 && !done(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  return done();
+}
+}  // namespace
+
+// A dongle that stopped answering but is still listed can take as long as the system likes to
+// open (half a minute was seen). That wait must not hold up the reader thread: the other dongles'
+// data keeps coming, every pass, while it opens.
+TEST_F(Doorman, AHungOpenDoesNotHoldUpTheOtherDonglesData) {
+  Plug("A", L"TESTA");
+  Step();
+  Connect("A", 0, kA1, 0b1);
+  ASSERT_EQ(sink.attached, (std::vector<std::string>{Serial(kA1)}));
+  lh::usb::g_doormanInlineIo = false;   // B is opened and written as in the driver, on threads of its own
+  fake::Hang("B");
+  Plug("B", L"TESTB");
+  double longest = 0;
+  for (int i = 0; i < 20; ++i) {
+    Queue("A0", Imu(0, uint8_t(i)));
+    const auto start = std::chrono::steady_clock::now();
+    Step();
+    longest = std::max(longest, std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+    EXPECT_TRUE(fake::Open("A0")->input.empty()) << "pass " << i;   // A's report was read in this pass
+  }
+  EXPECT_LT(longest, 0.5) << "a reader pass waited for B's open";   // a pass takes well under 1 ms
+  EXPECT_EQ(sink.Count("Doorman Dongle OHDG-TESTB opened"), 0u);
+  EXPECT_TRUE(WaitFor([] { std::lock_guard lock(fake::m); return fake::hanging == 1; }));   // still opening
+
+  // B answers again: a later pass takes it, and its commands go out.
+  fake::Release();
+  EXPECT_TRUE(WaitFor([&] { Step(); return sink.Count("Doorman Dongle OHDG-TESTB opened") > 0; }));
+  EXPECT_EQ(sink.Count("Doorman Dongle OHDG-TESTB opened"), 1u);
+  ASSERT_TRUE(transport->SetPairing("OHDG-TESTB", 5000));
+  Step();
+  EXPECT_TRUE(WaitFor([] { return Sent("B0", 0x24) > 0; }));
+  transport->Stop();
+  std::lock_guard lock(fake::m);
+  for (const auto& h : fake::handles) EXPECT_TRUE(h->closed) << h->path;
+}
+
+// A dongle unplugged while it opens is not set up; one still opening when the transport stops has
+// what it opened closed.
+TEST_F(Doorman, ADongleThatOpensWhileUnpluggedOrStoppedIsNotSetUp) {
+  lh::usb::g_doormanInlineIo = false;
+  fake::Hang("B");
+  Plug("B", L"TESTB");
+  Step();   // the open starts, and hangs
+  fake::Unplug("B");
+  fake::Release();
+  for (int i = 0; i < 5; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    Step();
+  }
+  EXPECT_EQ(sink.Count("Doorman Dongle OHDG-TESTB opened"), 0u);
+  EXPECT_EQ(HandlesOf("B"), 0u);
+
+  fake::Hang("B");
+  Plug("B", L"TESTB");
+  ASSERT_TRUE(WaitFor([&] { Step(); std::lock_guard lock(fake::m); return fake::hanging > 0; }));
+  fake::Release();
+  ASSERT_TRUE(WaitFor([] { return HandlesOf("B") == 5; }));   // its four interfaces and the writer's
+  transport->Stop();   // before a pass takes it
+  EXPECT_EQ(sink.Count("Doorman Dongle OHDG-TESTB opened"), 0u);
+  std::lock_guard lock(fake::m);
+  for (const auto& h : fake::handles) EXPECT_TRUE(h->closed) << h->path;
 }

@@ -12,7 +12,8 @@
 // identified from itself: feature 0x01 (IMU ranges) and the config's device_serial_number.
 // Each device becomes virtual wired endpoints (Imu + Optical + Buttons).
 //
-// Runs on the UsbTransport reader thread (Pump); config reads run on a worker thread.
+// Runs on the UsbTransport reader thread (Pump); config reads run on a worker thread, and opening
+// the dongle and writing to it on threads of their own.
 // Several dongles can run side by side: one DoormanDongle each, keyed by USB serial.
 #pragma once
 
@@ -41,9 +42,9 @@ namespace lh::usb {
 
 class ReportDecoder;
 
-// Tests: DoormanDongle writes its commands from the calling thread (no writer thread), so what was
-// written can be checked right after a reader pass.
-extern bool g_doormanInlineWrites;
+// Tests: DoormanDongle opens the dongle and writes its commands from the calling thread (no opener
+// or writer thread), so what was opened and written can be checked right after a reader pass.
+extern bool g_doormanInlineIo;
 
 // The dongle's USB data interfaces: interface 0 carries commands and replies, slot s streams on
 // interface s % kDoormanInterfaces (dongle-fw usb_descriptors.c).
@@ -96,7 +97,8 @@ class DoormanDongle {
                 std::atomic<uint16_t>* nextEp, std::string steamConfigDir, LogFn log, DoormanCarriers* carriers = nullptr);
   ~DoormanDongle();
 
-  // Reader thread. Opens the dongle's interfaces (at most one attempt every 2 s); true if open.
+  // Reader thread. Starts opening the dongle's interfaces on a thread of its own (at most one
+  // attempt every 2 s); Pump takes the dongle once they're open. True if open.
   bool Open(const DoormanDongleFound& found, double now);
   bool IsOpen() const { return dev_ != nullptr; }   // reader thread
   void Pump(double now);   // reader thread: read/dispatch; closes the dongle on a read or write error
@@ -212,8 +214,15 @@ class DoormanDongle {
   std::deque<std::array<uint8_t, 65>> writes_;
   bool writerStop_ = false;
   std::atomic<bool> writeFailed_{false};
-  void StartWriter(const std::string& path);
+  void StartWriter();
   void StopWriter();
+  // Opening runs on a thread of its own too: hid_open_path takes as long as the system does (half a
+  // minute for a dongle that stopped answering), and on the reader thread every device's data waited.
+  std::thread opener_;
+  std::atomic<bool> openerDone_{false};
+  std::array<hid_device_*, kDoormanInterfaces> openedDevs_{};   // the opener's result: every interface or none
+  hid_device_* openedWriteDev_ = nullptr;
+  bool TakeOpened();   // reader thread: the dongle, once the opener has opened it
   double nextOpen_ = 0, nextLive_ = 0, nextStats_ = 0, nextLinkLog_ = 0;
   int statsSlot_ = 0, statsSeq_ = -1;
   int idsSeq_[2] = {-1, -1};    // the slots (0x25) requests in flight

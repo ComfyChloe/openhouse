@@ -110,20 +110,56 @@ DoormanDongle::DoormanDongle(std::string serial, IInputSink* sink, ReportDecoder
 
 DoormanDongle::~DoormanDongle() { Close(); }
 
-bool DoormanDongle::Open(const DoormanDongleFound& found, double now) {
-  if (dev_) return true;
-  if (now < nextOpen_) return false;
-  nextOpen_ = now + 2.0;
-  for (int i = 0; i < kDoormanInterfaces; ++i) {
-    devs_[size_t(i)] = hid_open_path(found.paths[size_t(i)].c_str());
-    if (!devs_[size_t(i)]) {   // all or nothing: a slot on a missing interface would never be heard
-      for (auto& d : devs_) if (d) { hid_close(d); d = nullptr; }
-      return false;
+namespace {
+// One dongle open at a time, as when the reader thread opened them: hid_open_path resets and sets
+// hidapi's process-wide error string.
+std::mutex g_openMutex;
+
+// Every interface of a dongle, or none (a slot on a missing interface would never be heard); with
+// writeHandle, a second handle on interface 0 for the writer thread too.
+void OpenInterfaces(const std::array<std::string, kDoormanInterfaces>& paths,
+                    std::array<hid_device_*, kDoormanInterfaces>* devs, hid_device_** writeDev, bool writeHandle) {
+  std::lock_guard lock(g_openMutex);
+  for (size_t i = 0; i < paths.size(); ++i) {
+    (*devs)[i] = hid_open_path(paths[i].c_str());
+    if (!(*devs)[i]) {
+      for (auto& d : *devs) if (d) { hid_close(d); d = nullptr; }
+      return;
     }
-    hid_set_nonblocking(devs_[size_t(i)], 1);
+    hid_set_nonblocking((*devs)[i], 1);
   }
+  // Blocking: the writer thread waits in hid_write, not the reader. None: Send writes from the
+  // reader thread, as before.
+  if (writeHandle) *writeDev = hid_open_path(paths[0].c_str());
+}
+}  // namespace
+
+bool DoormanDongle::Open(const DoormanDongleFound& found, double now) {
+  if (dev_ || TakeOpened()) return true;
+  if (opener_.joinable() || now < nextOpen_) return false;   // still opening, or tried less than 2 s ago
+  nextOpen_ = now + 2.0;
+  if (g_doormanInlineIo) {
+    OpenInterfaces(found.paths, &openedDevs_, &openedWriteDev_, false);
+    return TakeOpened();
+  }
+  openerDone_ = false;
+  opener_ = std::thread([this, paths = found.paths] {
+    OpenInterfaces(paths, &openedDevs_, &openedWriteDev_, true);
+    openerDone_ = true;
+  });
+  return false;
+}
+
+bool DoormanDongle::TakeOpened() {
+  if (opener_.joinable()) {
+    if (!openerDone_) return false;
+    opener_.join();
+  }
+  if (!openedDevs_[0]) return false;   // not opened (all or nothing)
+  devs_ = std::exchange(openedDevs_, {});
   dev_ = devs_[0];
-  if (!g_doormanInlineWrites) StartWriter(found.paths[0]);
+  writeDev_ = std::exchange(openedWriteDev_, nullptr);
+  if (writeDev_) StartWriter();
   {
     std::lock_guard lock(mutex_);
     opened_ = true;
@@ -134,11 +170,9 @@ bool DoormanDongle::Open(const DoormanDongleFound& found, double now) {
   return true;
 }
 
-bool g_doormanInlineWrites = false;
+bool g_doormanInlineIo = false;
 
-void DoormanDongle::StartWriter(const std::string& path) {
-  writeDev_ = hid_open_path(path.c_str());   // blocking: the thread waits in hid_write, not the reader
-  if (!writeDev_) return;                    // then Send writes from the reader thread, as before
+void DoormanDongle::StartWriter() {
   writerStop_ = false;
   writeFailed_ = false;
   writer_ = std::thread([this] {
@@ -203,6 +237,10 @@ void DoormanDongle::Drop() {
 
 void DoormanDongle::Close() {
   Drop();
+  if (opener_.joinable()) opener_.join();   // still opening: waits for it, and closes what it opened
+  for (auto& d : openedDevs_) if (d) { hid_close(d); d = nullptr; }
+  if (openedWriteDev_) hid_close(openedWriteDev_);
+  openedWriteDev_ = nullptr;
   {
     std::lock_guard lock(mutex_);
     for (auto& w : featureWaits_) w->done = true;
@@ -238,7 +276,7 @@ void DoormanDongle::Downlink(int slot, const uint8_t* frame, size_t n) {
 }
 
 void DoormanDongle::Pump(double now) {
-  if (!dev_) return;   // the transport opens it again when it's listed again
+  if (!dev_ && !TakeOpened()) return;   // the transport opens it again when it's listed again
   if (writeFailed_) { Drop(); return; }   // unplugged: the writer saw it first
 
   if (home_ && !homeSent_) {           // once per open: the dongle keeps its home in RAM only
