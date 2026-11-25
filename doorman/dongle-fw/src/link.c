@@ -280,6 +280,10 @@ static int txrx(uint8_t ch, uint32_t base, uint8_t prefix, uint32_t wait_us)
    answers but cannot advance, not a loss burst. */
 #define DUP_RUN_LIMIT 64
 static int slot_skipping(const slot_t *s) { return s->skip_until && (int32_t)(ms_ticks - s->skip_until) < 0; }
+/* Its radio gives up after 1 s without a POLL and is usually back 1.0-1.2 s after the skip starts, sometimes
+   later (1.3 s seen); slot_reset ends the skip then. Polled again before that, the slot goes inactive and the
+   host drops the device. */
+static void slot_skip(slot_t *s) { s->skip_until = ms_ticks + 1500; if (!s->skip_until) s->skip_until = 1; }
 
 static int poll_slot(uint8_t i, uint8_t ch, uint32_t t_tx)   /* 1: it answered; ch: cur_ch, or a ghost-follow channel */
 {
@@ -335,7 +339,7 @@ static int poll_slot(uint8_t i, uint8_t ch, uint32_t t_tx)   /* 1: it answered; 
        leave the slot alone for longer than the radio's 1 s "dongle gone" timeout: it rejoins, which
        resets the sequence on both sides. DUP_RUN_LIMIT is well above any loss burst: a lost answer
        is a timeout, not a dup. */
-    if (++s->dup_run >= DUP_RUN_LIMIT) { s->dup_run = 0; s->skip_until = ms_ticks + 1200; }
+    if (++s->dup_run >= DUP_RUN_LIMIT) { s->dup_run = 0; slot_skip(s); }
     return 1;
   }
   s->dup_run = 0;
@@ -541,8 +545,12 @@ void link_poll(void)
      period from each POLL, so the plan can change from one cycle to the next. */
   plan = 0;
   int n = 0;
-  for (int i = 0; i < DML_SLOTS; i++)
-    if (((pairs.used >> i) & 1) && sl[i].active && !slot_skipping(&sl[i])) { plan |= 1u << i; n++; }
+  for (int i = 0; i < DML_SLOTS; i++) {
+    if (sl[i].skip_until && !slot_skipping(&sl[i])) sl[i].skip_until = 0;   /* over (and no wrap later) */
+    /* A skipping slot keeps its place, with no POLL in it: the cycle's length and every other
+       slot's time stay as they were (and so does where they fall against another dongle's). */
+    if (((pairs.used >> i) & 1) && sl[i].active) { plan |= 1u << i; n++; }
+  }
   /* bigger responses amortise the ~450 us per-slot overhead: 6 x 120 B = 6.3 ms cycle, ~18 kB/s per device
      (72 B gave 12.9 kB/s, too little headroom for resends; queues overflowed). 7-8 devices: 176 B, 9.9 ms
      and ~17.7 kB/s each at 8, over the ~13 kB/s a device sends at its worst (LH1, two bases) */
@@ -567,6 +575,7 @@ void link_poll(void)
     if (!((plan >> i) & 1)) continue;
     wait_until(t_c + (uint32_t)k * slot_us);
     k++;
+    if (slot_skipping(&sl[i])) continue;                    /* its place, left empty */
     const uint32_t t0 = us_now();
     uint8_t ch = cur_ch;
     const slot_t *g = &sl[i];
@@ -690,10 +699,10 @@ int link_cmd(const uint8_t *in, uint8_t *d, uint8_t *st)    /* 0x20..0x2F, 0x32.
     if (in[2] != 0xFF) ghost = in[2];
     d[0] = ghost; put32(d + 2, ghost_polls); put32(d + 6, ghost_ok); return 1;
   case 0x33:                                                /* make a slot's radio rejoin: [slot] */
-    /* Left out of the plan past the radio's 1 s "dongle gone" timeout, as a long dup run does. The
+    /* Not polled past the radio's 1 s "dongle gone" timeout, as after a long dup run. The
        host asks for it when a connected device has sent nothing for seconds. */
     if (in[2] >= DML_SLOTS || !((pairs.used >> in[2]) & 1)) { *st = 2; return 1; }
-    s->skip_until = ms_ticks + 1200; if (!s->skip_until) s->skip_until = 1;
+    slot_skip(s);
     d[0] = in[2]; return 1;
   case 0x2E: if (in[2] != 0xFF) defer_decode = in[2]; d[0] = defer_decode; return 1;   /* deferred decode */
   case 0x2D:                                                /* timing: [adaptive 0/1, 0xFF keeps] */
