@@ -222,6 +222,23 @@ jobs:
         run: scripts/build-firmware.sh
       - name: Check nRF52833 dongle build
         run: make -C doorman/dongle-fw check-nrf52833
+      # The images users flash. Nothing above links them: check-nrf52833 builds one board's banks and the host test
+      # builds link.c alone, so an install stub that outgrows its region (ld/stub_sd.ld: 40 KB) failed only where
+      # someone built it, never on the push that broke it.
+      - name: Build Doorman dongle images
+        run: make -C doorman/dongle-fw
+      - name: Build Doorman radio images
+        run: |
+          make -C doorman/radio-fw
+          make -C doorman/radio-fw TARGET=idx
+      # How much room the install stubs have left; the link itself fails on the push that overflows.
+      - name: Doorman install image headroom
+        run: |
+          arm-none-eabi-size doorman/dongle-fw/build/doorman_dongle_sd.elf \
+            doorman/dongle-fw/build/doorman_dongle_nosd.elf \
+            doorman/dongle-fw/build/doorman_dongle_holyiot.elf \
+            doorman/dongle-fw/build/doorman_dongle_pca10059.elf \
+            doorman/dongle-fw/build/doorman_dongle_kuroshin.elf
       # The dongle's link.c built on the host: adaptive hopping on all 16 against master's rule, and homes (cmd 0x36).
       - name: Doorman hopping host test
         run: make -C doorman/test check
